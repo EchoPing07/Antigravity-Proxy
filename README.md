@@ -60,7 +60,7 @@ docker compose up -d --build
 - OpenAI 风格：`Authorization: Bearer sk-...`
 - Anthropic 风格：`x-api-key: sk-...`
 
-## Web 管理面板（页面说明）
+## Web 管理面板
 
 入口：`http://localhost:<PORT>`
 
