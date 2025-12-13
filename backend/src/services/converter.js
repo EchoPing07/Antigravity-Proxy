@@ -5,6 +5,22 @@ import { getMappedModel, isThinkingModel, AVAILABLE_MODELS } from '../config.js'
 const DEFAULT_THINKING_BUDGET = 4096;
 const DEFAULT_TEMPERATURE = 1;
 
+// OpenAI 兼容：思考内容输出格式
+// - reasoning_content（默认）：思考增量写入 delta.reasoning_content / message.reasoning_content，正文不包含 <think>
+// - tags：思考混入正文并用 <think></think> 包裹
+// - both：两者都输出（某些客户端会显示重复内容）
+const OPENAI_THINKING_OUTPUT = String(process.env.OPENAI_THINKING_OUTPUT || 'reasoning_content')
+    .trim()
+    .toLowerCase();
+const OPENAI_THINKING_INCLUDE_REASONING =
+    OPENAI_THINKING_OUTPUT === 'reasoning_content' ||
+    OPENAI_THINKING_OUTPUT === 'reasoning' ||
+    OPENAI_THINKING_OUTPUT === 'both';
+const OPENAI_THINKING_INCLUDE_TAGS =
+    OPENAI_THINKING_OUTPUT === 'tags' ||
+    OPENAI_THINKING_OUTPUT === 'tag' ||
+    OPENAI_THINKING_OUTPUT === 'both';
+
 /**
  * OpenAI 请求 → Antigravity 请求转换
  * @param {Object} openaiRequest - OpenAI 格式的请求
@@ -349,13 +365,33 @@ export function convertSSEChunk(antigravityData, requestId, model, includeThinki
         for (const part of parts) {
             // 处理思维链内容
             if (part.thought) {
-                if (includeThinking) {
-                    // 检查是否是思维链的开始
+                if (!includeThinking) continue;
+
+                const thoughtText = part.text ?? '';
+
+                // 1) 输出到 reasoning_content（Cherry Studio 等客户端会单独折叠显示）
+                if (OPENAI_THINKING_INCLUDE_REASONING && thoughtText) {
+                    chunks.push({
+                        id: `chatcmpl-${requestId}`,
+                        object: 'chat.completion.chunk',
+                        created: Math.floor(Date.now() / 1000),
+                        model,
+                        choices: [{
+                            index: 0,
+                            delta: {
+                                reasoning_content: thoughtText
+                            },
+                            finish_reason: null
+                        }]
+                    });
+                }
+
+                // 2) 可选：以 <think> 标签混入正文（兼容不识别 reasoning_content 的客户端）
+                if (OPENAI_THINKING_INCLUDE_TAGS && thoughtText) {
                     const wasThinking = thinkingState.get(stateKey);
-                    let content = part.text;
+                    let content = thoughtText;
 
                     if (!wasThinking) {
-                        // 思维链开始，添加开始标签
                         content = '<think>' + content;
                         thinkingState.set(stateKey, true);
                     }
@@ -378,7 +414,7 @@ export function convertSSEChunk(antigravityData, requestId, model, includeThinki
             }
 
             // 如果之前在思维链中，现在遇到非思维内容，添加结束标签
-            if (thinkingState.get(stateKey) && (part.text !== undefined || part.functionCall || part.inlineData)) {
+            if (OPENAI_THINKING_INCLUDE_TAGS && thinkingState.get(stateKey) && (part.text !== undefined || part.functionCall || part.inlineData)) {
                 chunks.push({
                     id: `chatcmpl-${requestId}`,
                     object: 'chat.completion.chunk',
@@ -461,7 +497,7 @@ export function convertSSEChunk(antigravityData, requestId, model, includeThinki
         // 处理结束标志
         if (candidate.finishReason === 'STOP' || candidate.finishReason === 'MAX_TOKENS') {
             // 如果还在思维链中，先关闭标签
-            if (thinkingState.get(stateKey)) {
+            if (OPENAI_THINKING_INCLUDE_TAGS && thinkingState.get(stateKey)) {
                 chunks.push({
                     id: `chatcmpl-${requestId}`,
                     object: 'chat.completion.chunk',
@@ -510,13 +546,20 @@ export function convertResponse(antigravityResponse, requestId, model, includeTh
 
         // 提取文本内容
         let content = '';
+        let reasoningContent = '';
         const toolCalls = [];
 
         for (const part of parts) {
             // 处理思维链
             if (part.thought) {
-                if (includeThinking) {
-                    content += `<think>${part.text}</think>`;
+                if (!includeThinking) continue;
+                const thoughtText = part.text ?? '';
+
+                if (OPENAI_THINKING_INCLUDE_REASONING && thoughtText) {
+                    reasoningContent += thoughtText;
+                }
+                if (OPENAI_THINKING_INCLUDE_TAGS && thoughtText) {
+                    content += `<think>${thoughtText}</think>`;
                 }
                 continue;
             }
@@ -546,6 +589,10 @@ export function convertResponse(antigravityResponse, requestId, model, includeTh
             role: 'assistant',
             content: content
         };
+
+        if (OPENAI_THINKING_INCLUDE_REASONING && reasoningContent) {
+            message.reasoning_content = reasoningContent;
+        }
 
         if (toolCalls.length > 0) {
             message.tool_calls = toolCalls;
