@@ -62,7 +62,7 @@ docker compose up -d --build
 
 ## Web 管理面板
 
-入口：`http://localhost:<PORT>`
+入口：`http://127.0.0.1:8088`
 
 - `Dashboard`：账号状态、今日请求数/Token、模型使用统计
 - `Accounts`
