@@ -7,6 +7,24 @@ function parseIntEnv(name, fallback) {
 
 const MAX_STRING_CHARS = parseIntEnv('LOG_MAX_CHARS', 20000);
 
+const SENSITIVE_KEYS = new Set([
+  'authorization',
+  'x_api_key',
+  'api_key',
+  'apikey',
+  'access_token',
+  'refresh_token',
+  'id_token',
+  'client_secret',
+  'password',
+  'jwt_secret'
+]);
+
+function isSensitiveKey(key) {
+  const normalized = String(key).trim().toLowerCase().replace(/-/g, '_');
+  return SENSITIVE_KEYS.has(normalized);
+}
+
 function sanitizeForLog(value, seen = new WeakSet()) {
   if (value === null || value === undefined) return value;
 
@@ -28,8 +46,8 @@ function sanitizeForLog(value, seen = new WeakSet()) {
 
   const out = {};
   for (const [k, v] of Object.entries(value)) {
-    // 避免把 token/API key 打到日志里（理论上 body 不应包含，但保险）
-    if (k.toLowerCase().includes('token') || k.toLowerCase().includes('api_key') || k.toLowerCase().includes('apikey')) {
+    // 避免把密钥打到日志里（token 数量/usage 不是密钥，不应被误杀）
+    if (isSensitiveKey(k)) {
       out[k] = '[redacted]';
       continue;
     }
@@ -43,4 +61,3 @@ export function logModelCall(payload) {
   const safe = sanitizeForLog(payload);
   console.log(JSON.stringify(safe, null, 2));
 }
-
