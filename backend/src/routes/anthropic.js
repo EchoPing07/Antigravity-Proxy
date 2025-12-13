@@ -98,6 +98,7 @@ export default async function anthropicRoutes(fastify) {
                 let sseState = {};
                 let lastUsage = null;
                 let sawAnyUpstreamEvents = false;
+                let sawAnyContentBlock = false;
 
                 invokedUpstream = true;
                 await streamChat(
@@ -114,6 +115,9 @@ export default async function anthropicRoutes(fastify) {
                         for (const event of events) {
                             const eventType = event.type;
                             sawAnyUpstreamEvents = true;
+                            if (eventType === 'content_block_start' || eventType === 'content_block_delta') {
+                                sawAnyContentBlock = true;
+                            }
                             streamEventsForLog.push({ event: eventType, data: event });
                             reply.raw.write(`event: ${eventType}\ndata: ${JSON.stringify(event)}\n\n`);
 
@@ -140,7 +144,7 @@ export default async function anthropicRoutes(fastify) {
                 );
 
                 // 上游有时会返回“HTTP 200 + SSE 结束”但中间没有任何 events（例如安全拦截/空回复）
-                if (status === 'success' && !sawAnyUpstreamEvents) {
+                if (status === 'success' && (!sawAnyUpstreamEvents || !sawAnyContentBlock)) {
                     status = 'error';
                     errorMessage = 'Upstream returned empty response (no candidates)';
                     const errorEvent = {

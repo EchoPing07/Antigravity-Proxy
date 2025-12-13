@@ -115,9 +115,14 @@ export default async function openaiRoutes(fastify) {
                     abortController.signal
                 );
 
-                // 上游有时会返回“HTTP 200 + SSE 结束”，但中间没有任何 candidates（例如安全拦截/空回复）
+                // 上游有时会返回“HTTP 200 + SSE 结束”，但没有任何有效内容（例如安全拦截/空回复）
                 // 这种情况下给客户端一个明确的 error chunk，避免出现“空回复且不报错”
-                if (status === 'success' && streamChunksForLog.length === 0) {
+                const hasUsefulDelta = streamChunksForLog.some((chunk) => {
+                    const delta = chunk?.choices?.[0]?.delta;
+                    return !!(delta && (delta.content || delta.reasoning_content || delta.tool_calls));
+                });
+
+                if (status === 'success' && !hasUsefulDelta) {
                     status = 'error';
                     errorMessage = 'Upstream returned empty response (no candidates)';
                     const errorChunk = {
