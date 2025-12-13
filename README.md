@@ -278,7 +278,7 @@ antigravity-proxy/
 | 变量 | 默认值 | 说明 |
 |---|---:|---|
 | `PORT` | `8088` | 对外端口（`npm start` 监听端口 / Docker 映射端口；容器内固定监听 `3000`） |
-| `HOST` | `0.0.0.0` | 监听地址（`npm start` 用） |
+| `HOST` | `127.0.0.1` | 监听地址（`npm start` 用；Docker 会强制用 `0.0.0.0`） |
 | `DB_PATH` | `../data/database.sqlite` | SQLite 路径（`npm start` 默认；Docker 固定 `/app/data/database.sqlite`） |
 | `NPM_REGISTRY` | (空) | 仅 `npm start`：自定义 npm registry（网络慢时可用镜像） |
 | `AGP_FORCE_BUILD` | `false` | `npm start` 强制重新安装前端依赖并重建 `frontend/dist` |

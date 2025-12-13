@@ -22,7 +22,7 @@ export const ANTIGRAVITY_CONFIG = {
 // 服务器配置
 export const SERVER_CONFIG = {
     port: process.env.PORT || 3000,
-    host: process.env.HOST || '0.0.0.0',
+    host: process.env.HOST || '127.0.0.1',
     db_path: process.env.DB_PATH || './data/database.sqlite',
     admin_password: process.env.ADMIN_PASSWORD || 'admin123',
     // 管理接口兼容：Authorization: Bearer <ADMIN_PASSWORD>

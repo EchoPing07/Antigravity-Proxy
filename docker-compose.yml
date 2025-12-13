@@ -13,6 +13,8 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
       # 仪表盘「今日」统计时区（分钟），中国时间为 480
       - DASHBOARD_TZ_OFFSET_MINUTES=${DASHBOARD_TZ_OFFSET_MINUTES:-480}
+      # 容器内必须监听 0.0.0.0 才能被宿主机端口映射访问
+      - HOST=0.0.0.0
       - PORT=3000
     ports:
       - "${PORT:-8088}:3000"
