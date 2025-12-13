@@ -44,7 +44,7 @@ docker compose up -d --build
 
 ### 1) 登录管理面板
 
-打开 `http://localhost:<PORT>`，使用 `ADMIN_PASSWORD` 登录。
+打开 `http://127.0.0.1:8088`，使用 `ADMIN_PASSWORD` 登录。
 
 ### 2) 添加账号（Accounts）
 
