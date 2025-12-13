@@ -17,6 +17,9 @@ JWT_SECRET=change-me-too
 # 可选（一般不用填）：npm start 会自动用 ../data/database.sqlite
 # DB_PATH=../data/database.sqlite
 
+# 可选：npm 安装很慢时（例如中国大陆网络）
+# NPM_REGISTRY=https://registry.npmmirror.com
+
 # 可选：管理接口兼容 Authorization: Bearer <ADMIN_PASSWORD>
 # ADMIN_PASSWORD_BEARER_COMPAT=true
 EOF
@@ -28,6 +31,8 @@ EOF
 cd antigravity-proxy
 npm start
 ```
+
+首次运行会自动安装前后端依赖并构建前端（可能需要几分钟）；之后再次启动通常会快很多。
 
 ### 方式 B：Docker 一条命令（部署用）
 
@@ -276,6 +281,7 @@ antigravity-proxy/
 | `PORT` | `8088` | 对外端口（`npm start` 监听端口 / Docker 映射端口；容器内固定监听 `3000`） |
 | `HOST` | `0.0.0.0` | 监听地址（`npm start` 用） |
 | `DB_PATH` | `../data/database.sqlite` | SQLite 路径（`npm start` 默认；Docker 固定 `/app/data/database.sqlite`） |
+| `NPM_REGISTRY` | (空) | 仅 `npm start`：自定义 npm registry（网络慢时可用镜像） |
 | `ADMIN_PASSWORD` | `admin123` | 管理面板密码 |
 | `JWT_SECRET` | `antigravity-proxy-secret-key-2024` | 管理 JWT 密钥 |
 | `ADMIN_PASSWORD_BEARER_COMPAT` | `true` | 兼容 `Authorization: Bearer <ADMIN_PASSWORD>`（建议生产关闭） |
