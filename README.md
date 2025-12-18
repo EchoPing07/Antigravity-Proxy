@@ -235,9 +235,13 @@ curl http://localhost:8088/v1/models -H "Authorization: Bearer sk-your-api-key"
 
 ## Anthropic thinking 处理（重要）
 
-Anthropic extended thinking 要求历史 `thinking` 块带 `signature`。由于上游返回的 thinking 不包含 signature：
-- 若历史消息不满足签名要求，服务端会自动把本次请求的 `thinking` 设为 `disabled`，并清理历史中的 `thinking/redacted_thinking`，避免 Anthropic 端报错。
-- 实现：`backend/src/services/converter.js` → `preprocessAnthropicRequest()`。
+Anthropic extended thinking 要求历史 `thinking` 块带 `signature`。
+
+- Antigravity 上游会在 Claude 的 thought part 上返回 `thoughtSignature`（对应 Anthropic 的 `thinking.signature`）；代理会自动映射到响应中。
+- 若客户端后续回放历史时丢失了 `signature`，代理会按 `tool_use_id` 缓存自动补齐。
+- 若历史仍不满足签名要求（无法补齐），服务端会自动把本次请求的 `thinking` 设为 `disabled`，并清理历史中的 `thinking/redacted_thinking`，避免 Anthropic 端报错。
+
+实现：`backend/src/services/converter.js` → `preprocessAnthropicRequest()`。
 
 ## 支持模型（`/v1/models` 返回）
 
@@ -290,6 +294,8 @@ antigravity-proxy/
 | `OPENAI_THINKING_OUTPUT` | `reasoning_content` | OpenAI SSE 思考输出：`reasoning_content`（推荐，Cherry Studio 可折叠）/ `tags`（输出 `<think>` 到正文）/ `both` |
 | `TOOL_THOUGHT_SIGNATURE_TTL_MS` | `600000` | Gemini 工具调用签名缓存 TTL（毫秒）；用于在下一轮回放 `thoughtSignature`，避免上游报缺失 |
 | `TOOL_THOUGHT_SIGNATURE_MAX` | `5000` | Gemini 工具调用签名缓存最大条数（防止内存无限增长；按最旧淘汰） |
+| `CLAUDE_THINKING_SIGNATURE_TTL_MS` | `600000` | Claude thinking 签名缓存 TTL（毫秒）；用于在下一轮回放 `thinking.signature`（代理用 tool_use_id 自动补齐） |
+| `CLAUDE_THINKING_SIGNATURE_MAX` | `5000` | Claude thinking 签名缓存最大条数（按最旧淘汰） |
 | `ADMIN_PASSWORD` | `admin123` | 管理面板密码 |
 | `JWT_SECRET` | `antigravity-proxy-secret-key-2024` | 管理 JWT 密钥 |
 | `ADMIN_PASSWORD_BEARER_COMPAT` | `true` | 兼容 `Authorization: Bearer <ADMIN_PASSWORD>`（建议生产关闭） |

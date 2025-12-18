@@ -12,6 +12,14 @@ const TOOL_THOUGHT_SIGNATURE_TTL_MS = Number(process.env.TOOL_THOUGHT_SIGNATURE_
 const TOOL_THOUGHT_SIGNATURE_MAX = Number(process.env.TOOL_THOUGHT_SIGNATURE_MAX || 5000);
 const toolThoughtSignatureCache = new Map(); // key: tool_call_id -> { signature, savedAt }
 
+// Claude extended thinking：signature 透传/回放（Anthropic 端点）
+// Antigravity 上游对 Claude 也会下发 thoughtSignature（可能出现在 thought part 上，text 为空）。
+// 但部分客户端不会保留 thinking.signature，下一轮回放工具历史会触发上游校验失败。
+// 这里以 tool_use_id（= functionCall.id）为 key 做短期缓存，并在请求侧自动补齐/回放到上游。
+const CLAUDE_THINKING_SIGNATURE_TTL_MS = Number(process.env.CLAUDE_THINKING_SIGNATURE_TTL_MS || 10 * 60 * 1000);
+const CLAUDE_THINKING_SIGNATURE_MAX = Number(process.env.CLAUDE_THINKING_SIGNATURE_MAX || 5000);
+const claudeThinkingSignatureCache = new Map(); // key: tool_use_id -> { signature, savedAt }
+
 function cacheToolThoughtSignature(toolCallId, signature) {
     if (!toolCallId || !signature) return;
     const key = String(toolCallId);
@@ -31,6 +39,29 @@ function getCachedToolThoughtSignature(toolCallId) {
     if (!entry) return null;
     if (TOOL_THOUGHT_SIGNATURE_TTL_MS > 0 && Date.now() - entry.savedAt > TOOL_THOUGHT_SIGNATURE_TTL_MS) {
         toolThoughtSignatureCache.delete(key);
+        return null;
+    }
+    return entry.signature;
+}
+
+function cacheClaudeThinkingSignature(toolUseId, signature) {
+    if (!toolUseId || !signature) return;
+    const key = String(toolUseId);
+    claudeThinkingSignatureCache.set(key, { signature: String(signature), savedAt: Date.now() });
+
+    if (CLAUDE_THINKING_SIGNATURE_MAX > 0 && claudeThinkingSignatureCache.size > CLAUDE_THINKING_SIGNATURE_MAX) {
+        const oldestKey = claudeThinkingSignatureCache.keys().next().value;
+        if (oldestKey) claudeThinkingSignatureCache.delete(oldestKey);
+    }
+}
+
+function getCachedClaudeThinkingSignature(toolUseId) {
+    if (!toolUseId) return null;
+    const key = String(toolUseId);
+    const entry = claudeThinkingSignatureCache.get(key);
+    if (!entry) return null;
+    if (CLAUDE_THINKING_SIGNATURE_TTL_MS > 0 && Date.now() - entry.savedAt > CLAUDE_THINKING_SIGNATURE_TTL_MS) {
+        claudeThinkingSignatureCache.delete(key);
         return null;
     }
     return entry.signature;
@@ -882,15 +913,16 @@ function convertAnthropicMessage(msg, thinkingEnabled = false) {
         const regularParts = [];
         const functionCallParts = [];
 
-        for (const item of msg.content) {
-            // 处理 thinking 块 - 保留为 thought 部分
-            if (item.type === 'thinking') {
-                regularParts.push({
-                    text: item.thinking,
-                    thought: true
-                });
-                continue;
-            }
+	        for (const item of msg.content) {
+	            // 处理 thinking 块 - 保留为 thought 部分
+	            if (item.type === 'thinking') {
+	                regularParts.push({
+	                    text: item.thinking,
+	                    thought: true,
+	                    ...(item.signature ? { thoughtSignature: item.signature } : {})
+	                });
+	                continue;
+	            }
 
             // 处理 redacted_thinking 块 - 直接跳过，不发送给 Antigravity
             // 原因：Antigravity 会把 thought:true 的部分转换为 thinking 块发送给 Claude，
@@ -995,49 +1027,40 @@ export function convertAntigravityToAnthropic(antigravityResponse, requestId, mo
         }
 
         const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+        const thinkingParts = parts.filter(p => p.thought);
+        const otherParts = parts.filter(p => !p.thought);
 
         const content = [];
         let thinkingText = '';
-        let hasThinking = false;
+        let messageThinkingSignature = null;
+        const toolUseIds = [];
 
-        for (const part of parts) {
-            // 收集思维链内容
-            if (part.thought) {
-                hasThinking = true;
-                thinkingText += part.text;
-                continue;
+        // 先收集 thinking（以及 signature）
+        if (thinkingEnabled) {
+            for (const part of thinkingParts) {
+                thinkingText += (part.text || '');
+                const sig = part.thoughtSignature || part.thought_signature;
+                if (sig) messageThinkingSignature = sig;
             }
+        }
 
-            // 如果之前有思维链内容，先输出
-            if (thinkingText) {
-                content.push({
-                    type: 'thinking',
-                    thinking: thinkingText,
-                    // 注意：这里没有 signature，因为 Antigravity 没有保留它
-                    // 客户端需要处理这种情况，或者使用 redacted_thinking
-                });
-                thinkingText = '';
-            }
-
-            // 处理文本
+        // 再处理其他 blocks（text / tool_use / image）
+        for (const part of otherParts) {
             if (part.text !== undefined) {
-                content.push({
-                    type: 'text',
-                    text: part.text
-                });
+                content.push({ type: 'text', text: part.text });
             }
 
-            // 处理工具调用
             if (part.functionCall) {
+                const toolUseId = part.functionCall.id || `toolu_${uuidv4().slice(0, 8)}`;
+                toolUseIds.push(toolUseId);
                 content.push({
                     type: 'tool_use',
-                    id: part.functionCall.id || `toolu_${uuidv4().slice(0, 8)}`,
+                    id: toolUseId,
                     name: part.functionCall.name,
                     input: part.functionCall.args || {}
                 });
             }
 
-            // 处理图片
             if (part.inlineData) {
                 content.push({
                     type: 'image',
@@ -1050,12 +1073,16 @@ export function convertAntigravityToAnthropic(antigravityResponse, requestId, mo
             }
         }
 
-        // 处理剩余的思维链内容
-        if (thinkingText) {
+        if (thinkingEnabled && (thinkingText || messageThinkingSignature)) {
             content.unshift({
                 type: 'thinking',
-                thinking: thinkingText
+                thinking: thinkingText,
+                ...(messageThinkingSignature ? { signature: messageThinkingSignature } : {})
             });
+        }
+
+        if (messageThinkingSignature && toolUseIds.length > 0) {
+            for (const id of toolUseIds) cacheClaudeThinkingSignature(id, messageThinkingSignature);
         }
 
         // 确定 stop_reason
@@ -1102,44 +1129,55 @@ export function convertAntigravityToAnthropicSSE(antigravityData, requestId, mod
             return { events: [], state };
         }
 
-        const events = [];
-        let newState = { ...state };
+	        const events = [];
+	        let newState = { ...state };
+	        if (!('lastThinkingSignature' in newState)) newState.lastThinkingSignature = null;
+	        if (!Array.isArray(newState.pendingToolUseIds)) newState.pendingToolUseIds = [];
 
-        // 先分离 thinking 和非 thinking 的 parts
-        const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
-        const thinkingParts = parts.filter(p => p.thought);
-        const otherParts = parts.filter(p => !p.thought);
+	        // 先分离 thinking 和非 thinking 的 parts
+	        const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+	        const thinkingParts = parts.filter(p => p.thought);
+	        const otherParts = parts.filter(p => !p.thought);
 
-        // 先处理 thinking（确保 thinking 在前，index 0）
-        for (const part of thinkingParts) {
-            if (!newState.inThinking) {
-                // thinking 始终是 index 0
-                newState.thinkingIndex = 0;
+	        // 先处理 thinking（确保 thinking 在前，index 0）
+	        for (const part of thinkingParts) {
+	            const sig = part.thoughtSignature || part.thought_signature;
+	            if (sig) {
+	                newState.lastThinkingSignature = sig;
+	                if (newState.pendingToolUseIds.length > 0) {
+	                    for (const id of newState.pendingToolUseIds) cacheClaudeThinkingSignature(id, sig);
+	                    newState.pendingToolUseIds = [];
+	                }
+	            }
+	            if (!newState.inThinking) {
+	                // thinking 始终是 index 0
+	                newState.thinkingIndex = 0;
                 if (!newState.hasThinking) {
                     newState.hasThinking = true;
                     newState.nextIndex = 1; // 下一个块从 1 开始
                 }
                 newState.inThinking = true;
 
-                events.push({
-                    type: 'content_block_start',
-                    index: 0,
-                    content_block: {
-                        type: 'thinking',
-                        thinking: ''
-                    }
-                });
-            }
+	                events.push({
+	                    type: 'content_block_start',
+	                    index: 0,
+	                    content_block: {
+	                        type: 'thinking',
+	                        thinking: '',
+	                        ...(newState.lastThinkingSignature ? { signature: newState.lastThinkingSignature } : {})
+	                    }
+	                });
+	            }
 
-            events.push({
-                type: 'content_block_delta',
-                index: 0,
-                delta: {
-                    type: 'thinking_delta',
-                    thinking: part.text
-                }
-            });
-        }
+	            events.push({
+	                type: 'content_block_delta',
+	                index: 0,
+	                delta: {
+	                    type: 'thinking_delta',
+	                    thinking: part.text || ''
+	                }
+	            });
+	        }
 
         // 处理其他 parts（text 和 functionCall）
         for (const part of otherParts) {
@@ -1180,22 +1218,28 @@ export function convertAntigravityToAnthropicSSE(antigravityData, requestId, mod
                 });
             }
 
-            // 处理工具调用
-            if (part.functionCall) {
-                newState.hasToolUse = true;
-                const toolIndex = newState.nextIndex || (newState.hasThinking ? 1 : 0);
-                newState.nextIndex = toolIndex + 1;
+	            // 处理工具调用
+	            if (part.functionCall) {
+	                newState.hasToolUse = true;
+	                const toolIndex = newState.nextIndex || (newState.hasThinking ? 1 : 0);
+	                newState.nextIndex = toolIndex + 1;
+	                const toolUseId = part.functionCall.id || `toolu_${uuidv4().slice(0, 8)}`;
+	                if (newState.lastThinkingSignature) {
+	                    cacheClaudeThinkingSignature(toolUseId, newState.lastThinkingSignature);
+	                } else {
+	                    newState.pendingToolUseIds.push(toolUseId);
+	                }
 
-                events.push({
-                    type: 'content_block_start',
-                    index: toolIndex,
-                    content_block: {
-                        type: 'tool_use',
-                        id: part.functionCall.id || `toolu_${uuidv4().slice(0, 8)}`,
-                        name: part.functionCall.name,
-                        input: {}
-                    }
-                });
+	                events.push({
+	                    type: 'content_block_start',
+	                    index: toolIndex,
+	                    content_block: {
+	                        type: 'tool_use',
+	                        id: toolUseId,
+	                        name: part.functionCall.name,
+	                        input: {}
+	                    }
+	                });
 
                 events.push({
                     type: 'content_block_delta',
@@ -1272,8 +1316,8 @@ export function preprocessAnthropicRequest(request) {
     }
 
     // 检查历史消息中是否有 assistant 消息没有有效的 thinking 块
-    // 由于 Antigravity 不返回 Claude 的 thinking signature，我们无法在后续请求中提供有效的 signature
-    // 因此当检测到这种情况时，必须禁用 thinking 模式并移除 thinking 块
+    // 说明：部分客户端不会保留 thinking.signature。代理会尝试用该条 assistant 消息内的 tool_use_id
+    // 从本地缓存反查并补齐 signature；若仍无法补齐，则只能禁用 thinking 以避免上游校验失败。
     let needsDisabling = false;
 
     for (const msg of request.messages) {
@@ -1297,10 +1341,24 @@ export function preprocessAnthropicRequest(request) {
             break;
         }
 
-        // 检查 thinking 块是否有 signature（Claude API 要求）
-        if (firstBlock.type === 'thinking' && !firstBlock.signature) {
-            needsDisabling = true;
-            break;
+        // 检查 thinking / redacted_thinking 块是否有 signature（Claude API 要求）
+        if ((firstBlock.type === 'thinking' || firstBlock.type === 'redacted_thinking') && !firstBlock.signature) {
+            const toolUseIds = msg.content
+                .filter(b => b && b.type === 'tool_use' && b.id)
+                .map(b => b.id);
+
+            let recovered = null;
+            for (const id of toolUseIds) {
+                recovered = getCachedClaudeThinkingSignature(id);
+                if (recovered) break;
+            }
+
+            if (recovered) {
+                firstBlock.signature = recovered;
+            } else {
+                needsDisabling = true;
+                break;
+            }
         }
     }
 
