@@ -7,6 +7,15 @@ import { getDatabase } from '../db/index.js';
 const DEFAULT_THINKING_BUDGET = 4096;
 const DEFAULT_TEMPERATURE = 1;
 
+function logThinkingDowngrade(payload) {
+    try {
+        const obj = payload && typeof payload === 'object' ? payload : {};
+        console.warn(JSON.stringify({ kind: 'thinking_downgrade', ...obj }));
+    } catch {
+        // ignore
+    }
+}
+
 // Gemini 工具调用：thoughtSignature 透传（否则某些工具在下一轮会被上游拒绝）
 // 上游会在包含 functionCall 的 part 上返回 thoughtSignature；OpenAI 客户端并不知道这个字段，
 // 因此我们在代理内部用 tool_call_id 做一次短期缓存，并在用户回传 tool_calls 历史时自动补回。
@@ -366,6 +375,8 @@ export function convertOpenAIToAntigravity(openaiRequest, projectId = '', sessio
         budget_tokens  // 兼容另一种命名
     } = openaiRequest;
 
+    const requestId = `agent-${uuidv4()}`;
+
     // 提取 system 消息
     const systemMessages = messages.filter(m => m.role === 'system');
     const systemContent = systemMessages.map(m =>
@@ -408,12 +419,23 @@ export function convertOpenAIToAntigravity(openaiRequest, projectId = '', sessio
                 if (looksLikeClaudeToolId(msg.tool_call_id)) ids.add(msg.tool_call_id);
             }
         }
+        const missingIds = [];
         for (const id of ids) {
             const cachedClaude = getCachedClaudeToolThinking(id);
-            if (!cachedClaude?.signature) {
-                enableThinking = false;
-                break;
-            }
+            if (!cachedClaude?.signature) missingIds.push(id);
+        }
+        if (missingIds.length > 0) {
+            enableThinking = false;
+            logThinkingDowngrade({
+                provider: 'openai',
+                route: '/v1/chat/completions',
+                model: model || null,
+                user_id: openaiRequest?.user || openaiRequest?.metadata?.user_id || null,
+                reason: 'missing_thinking_signature_for_tool_use_history',
+                missing_tool_use_ids: missingIds.slice(0, 50),
+                missing_count: missingIds.length,
+                request_id: requestId
+            });
         }
     }
 
@@ -500,7 +522,7 @@ export function convertOpenAIToAntigravity(openaiRequest, projectId = '', sessio
     // 构建请求体
     const request = {
         project: projectId || '',
-        requestId: `agent-${uuidv4()}`,
+        requestId,
         request: {
             contents,
             generationConfig,
@@ -2135,20 +2157,16 @@ export function preprocessAnthropicRequest(request) {
     }
 
     // 降级：禁用 thinking，并移除历史中所有 thinking/redacted_thinking 块（否则会触发校验失败）
-    try {
-        const uniqueMissing = Array.from(new Set(missingToolUseIdsForSignature)).slice(0, 50);
-        console.warn(JSON.stringify({
-            kind: 'thinking_downgrade',
-            provider: 'anthropic',
-            model: request?.model || null,
-            user_id: request?.metadata?.user_id || null,
-            reason: 'missing_thinking_signature_for_tool_use_history',
-            missing_tool_use_ids: uniqueMissing,
-            missing_count: missingToolUseIdsForSignature.length
-        }));
-    } catch {
-        // ignore
-    }
+    const uniqueMissing = Array.from(new Set(missingToolUseIdsForSignature)).slice(0, 50);
+    logThinkingDowngrade({
+        provider: 'anthropic',
+        route: '/v1/messages',
+        model: request?.model || null,
+        user_id: request?.metadata?.user_id || null,
+        reason: 'missing_thinking_signature_for_tool_use_history',
+        missing_tool_use_ids: uniqueMissing,
+        missing_count: missingToolUseIdsForSignature.length
+    });
 
     const cleanedMessages = normalizedMessages.map(msg => {
         if (msg?.role !== 'assistant') return msg;
