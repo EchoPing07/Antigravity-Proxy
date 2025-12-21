@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { verifyApiKey, recordApiKeyUsage } from '../middleware/auth.js';
 import { accountPool } from '../services/accountPool.js';
 import { acquireModelSlot, releaseModelSlot } from '../services/rateLimiter.js';
-import { streamChat, chat } from '../services/antigravity.js';
+import { streamChat, chat, fetchAvailableModels } from '../services/antigravity.js';
 import { createRequestLog } from '../db/index.js';
 import { getMappedModel } from '../config.js';
 import { logModelCall } from '../services/modelLogger.js';
@@ -35,7 +35,129 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function parseModelsFromFetchAvailableModels(payload) {
+    const raw = payload && typeof payload === 'object' ? payload : {};
+    const models = raw.models ?? raw;
+
+    if (Array.isArray(models)) {
+        return models
+            .map((m) => {
+                if (typeof m === 'string') return { id: m };
+                if (m && typeof m === 'object') {
+                    const id = m.id || m.name || m.model;
+                    return id ? { id, ...m } : null;
+                }
+                return null;
+            })
+            .filter(Boolean);
+    }
+
+    if (models && typeof models === 'object') {
+        return Object.entries(models).map(([id, info]) => {
+            if (info && typeof info === 'object') return { id, ...info };
+            return { id };
+        });
+    }
+
+    return [];
+}
+
+function normalizeGeminiModelName(id) {
+    const raw = String(id || '').trim();
+    if (!raw) return null;
+    return raw.startsWith('models/') ? raw : `models/${raw}`;
+}
+
+function normalizeSupportedGenerationMethods(entry) {
+    const methods = entry?.supportedGenerationMethods;
+    if (Array.isArray(methods) && methods.length > 0) return methods;
+    return ['generateContent', 'streamGenerateContent'];
+}
+
+function toGeminiModelInfo(entry) {
+    const id = entry?.id || entry?.name || entry?.model;
+    const name = normalizeGeminiModelName(id);
+    if (!name) return null;
+
+    const out = {
+        name,
+        displayName: entry?.displayName || id,
+        description: entry?.description || entry?.reason || entry?.message || '',
+        supportedGenerationMethods: normalizeSupportedGenerationMethods(entry)
+    };
+
+    const inputLimit = entry?.inputTokenLimit ?? entry?.maxInputTokens ?? entry?.contextWindow ?? entry?.context_window;
+    if (inputLimit) out.inputTokenLimit = inputLimit;
+
+    const outputLimit = entry?.outputTokenLimit ?? entry?.maxOutputTokens;
+    if (outputLimit) out.outputTokenLimit = outputLimit;
+
+    return out;
+}
+
 export default async function geminiRoutes(fastify) {
+    // GET /v1beta/models - Gemini models list
+    fastify.get('/v1beta/models', {
+        preHandler: verifyApiKey
+    }, async (request, reply) => {
+        let account = null;
+        try {
+            account = await accountPool.getBestAccount('gemini-2.5-flash');
+            const payload = await fetchAvailableModels(account);
+            const entries = parseModelsFromFetchAvailableModels(payload);
+            const models = entries
+                .filter((m) => String(m?.id || m?.name || '').toLowerCase().includes('gemini'))
+                .map(toGeminiModelInfo)
+                .filter(Boolean);
+            return reply.code(200).send({ models });
+        } catch (error) {
+            return reply.code(500).send({
+                error: { message: error?.message || String(error), type: 'api_error', code: 'internal_error' }
+            });
+        } finally {
+            if (account) accountPool.unlockAccount(account.id);
+        }
+    });
+
+    // GET /v1beta/models/:model - Gemini model detail
+    fastify.get('/v1beta/models/:model', {
+        preHandler: verifyApiKey
+    }, async (request, reply) => {
+        const raw = typeof request.params?.model === 'string' ? request.params.model : '';
+        const target = decodeURIComponent(raw || '');
+        if (!target || target.includes(':')) {
+            return reply.code(404).send({
+                error: { message: `Model not found: ${target}`, type: 'invalid_request_error', code: 'model_not_found' }
+            });
+        }
+
+        let account = null;
+        try {
+            account = await accountPool.getBestAccount('gemini-2.5-flash');
+            const payload = await fetchAvailableModels(account);
+            const entries = parseModelsFromFetchAvailableModels(payload);
+            const models = entries
+                .filter((m) => String(m?.id || m?.name || '').toLowerCase().includes('gemini'))
+                .map(toGeminiModelInfo)
+                .filter(Boolean);
+
+            const normalized = normalizeGeminiModelName(target);
+            const hit = models.find((m) => m.name === normalized);
+            if (!hit) {
+                return reply.code(404).send({
+                    error: { message: `Model not found: ${target}`, type: 'invalid_request_error', code: 'model_not_found' }
+                });
+            }
+            return reply.code(200).send(hit);
+        } catch (error) {
+            return reply.code(500).send({
+                error: { message: error?.message || String(error), type: 'api_error', code: 'internal_error' }
+            });
+        } finally {
+            if (account) accountPool.unlockAccount(account.id);
+        }
+    });
+
     // Gemini native endpoint (minimal): /v1beta/models/<model>:(generateContent|streamGenerateContent)
     // 目前主要用于 gemini-3-pro-image，透传 generationConfig.imageConfig 等字段到上游。
     fastify.post('/v1beta/models/*', {
