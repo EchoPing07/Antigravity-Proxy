@@ -7,6 +7,11 @@ import { getDatabase } from '../db/index.js';
 const DEFAULT_THINKING_BUDGET = 4096;
 const DEFAULT_TEMPERATURE = 1;
 
+// Claude tool-result 兼容：上游有时需要“存在一个 text part”才会稳定输出 thought parts。
+// 为避免 "Continue." 这类可感知指令导致工具死循环，这里使用无语义、不可见的占位符字符。
+// U+2063 INVISIBLE SEPARATOR：一般不会被用户看到，也不具备“继续/再调用工具”的语义。
+const CLAUDE_TOOL_RESULT_TEXT_PLACEHOLDER = '\u2063';
+
 // 工具结果内容过长会导致上游报 Prompt is too long。
 // 由于客户端会在每一轮把全部 tool_result 原样回放到下一次请求里，
 // 多次工具调用叠加后很容易超过模型上下文窗口。
@@ -793,7 +798,10 @@ export function convertOpenAIToAntigravity(openaiRequest, projectId = '', sessio
                 });
 
             if (hasOnlyFunctionResponses && !hasNonEmptyText) {
-                last.parts.push({ text: 'Continue.' });
+                // 兼容：Claude（thinking）在“只包含工具结果”的 user 消息下，经常不会再输出 thought parts。
+                // 以前用 "Continue." 作为补丁会误导模型继续调用工具，导致不必要的工具死循环。
+                // 这里改为无语义占位符（空格），仅用于触发上游把该条消息视为“包含 text part”。
+                last.parts.push({ text: CLAUDE_TOOL_RESULT_TEXT_PLACEHOLDER });
             }
         }
     }
@@ -1650,7 +1658,8 @@ export function convertAnthropicToAntigravity(anthropicRequest, projectId = '', 
                 });
 
             if (hasOnlyFunctionResponses && !hasNonEmptyText) {
-                last.parts.push({ text: 'Continue.' });
+                // 同 OpenAI 端点：避免 "Continue." 误导模型继续调用工具。
+                last.parts.push({ text: CLAUDE_TOOL_RESULT_TEXT_PLACEHOLDER });
             }
         }
     }
