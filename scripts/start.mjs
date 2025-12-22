@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
 const backendDir = join(rootDir, 'backend');
-const frontendDir = join(rootDir, 'frontend');
 const startedAt = Date.now();
 
 function log(msg) {
@@ -70,48 +69,13 @@ async function ensureDeps(baseEnv) {
     return;
   }
 
-  if (existsSync(join(rootDir, 'node_modules'))) {
+  if (existsSync(join(rootDir, 'node_modules')) || existsSync(join(backendDir, 'node_modules'))) {
     log('Deps OK');
     return;
   }
 
-  const distIndex = join(frontendDir, 'dist', 'index.html');
-  const hasPrebuiltFrontend = existsSync(distIndex);
-  const forceBuild = baseEnv.AGP_FORCE_BUILD === '1' || baseEnv.AGP_FORCE_BUILD === 'true';
-
-  if (hasPrebuiltFrontend && !forceBuild) {
-    log('Installing backend deps only (prebuilt frontend detected)');
-    await runNpm([...npmInstallArgs, '--workspace', 'backend'], { cwd: rootDir, env: npmEnv });
-    return;
-  }
-
-  log('Installing deps (npm workspaces: frontend + backend; first run may take a few minutes)');
-  await runNpm(npmInstallArgs, { cwd: rootDir, env: npmEnv });
-}
-
-async function ensureFrontendBuild(baseEnv) {
-  const distIndex = join(frontendDir, 'dist', 'index.html');
-  const forceBuild = baseEnv.AGP_FORCE_BUILD === '1' || baseEnv.AGP_FORCE_BUILD === 'true';
-  if (baseEnv.AGP_SKIP_BUILD === '1' || baseEnv.AGP_SKIP_BUILD === 'true') {
-    log('Skip frontend build (AGP_SKIP_BUILD set)');
-    return;
-  }
-  if (forceBuild || !existsSync(distIndex)) {
-    log('Building frontend (vite build)');
-    await runNpm(['run', '--workspace', 'frontend', 'build'], {
-      cwd: rootDir,
-      env: {
-        ...baseEnv,
-        npm_config_cache: join(rootDir, '.npm-cache'),
-        npm_config_update_notifier: 'false',
-        npm_config_audit: 'false',
-        npm_config_fund: 'false',
-        ...(baseEnv.NPM_REGISTRY ? { npm_config_registry: baseEnv.NPM_REGISTRY } : {})
-      }
-    });
-  } else {
-    log('Frontend build OK');
-  }
+  log('Installing deps (npm workspace: backend)');
+  await runNpm([...npmInstallArgs, '--workspace', 'backend'], { cwd: rootDir, env: npmEnv });
 }
 
 async function main() {
@@ -122,7 +86,6 @@ async function main() {
 
   log('Preparing...');
   await ensureDeps(env);
-  await ensureFrontendBuild(env);
 
   log(`Starting backend on PORT=${env.PORT} ...`);
   const backend = spawn('node', ['src/bootstrap.js'], {
