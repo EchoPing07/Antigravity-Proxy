@@ -3,7 +3,6 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { SERVER_CONFIG } from '../config.js';
-import { v4 as uuidv4 } from 'uuid';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -17,13 +16,6 @@ export function initDatabase() {
     // 执行 schema
     const schema = readFileSync(join(__dirname, 'schema.sql'), 'utf-8');
     db.exec(schema);
-
-    // 初始化默认 API Key（如果没有）
-    const keyCount = db.prepare('SELECT COUNT(*) as count FROM api_keys').get();
-    if (keyCount.count === 0) {
-        const defaultKey = `sk-${uuidv4().replace(/-/g, '')}`;
-        db.prepare('INSERT INTO api_keys (key, name) VALUES (?, ?)').run(defaultKey, 'Default Key');
-    }
 
     return db;
 }
@@ -123,45 +115,6 @@ export function deleteAccount(id) {
     db.prepare('UPDATE request_logs SET account_id = NULL WHERE account_id = ?').run(id);
     // 然后删除账号
     db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
-}
-
-// ==================== API Key 操作 ====================
-
-export function getAllApiKeys() {
-    return getDatabase().prepare(`
-        SELECT id, key, name, status, request_count, token_count, created_at, last_used_at
-        FROM api_keys ORDER BY created_at DESC
-    `).all();
-}
-
-export function getApiKeyByKey(key) {
-    return getDatabase().prepare('SELECT * FROM api_keys WHERE key = ? AND status = ?').get(key, 'active');
-}
-
-export function createApiKey(name) {
-    const key = `sk-${uuidv4().replace(/-/g, '')}`;
-    const stmt = getDatabase().prepare('INSERT INTO api_keys (key, name, created_at) VALUES (?, ?, ?)');
-    stmt.run(key, name, Date.now());
-    return key;
-}
-
-export function updateApiKeyUsage(id, tokens) {
-    getDatabase().prepare(`
-        UPDATE api_keys SET request_count = request_count + 1, token_count = token_count + ?, last_used_at = ?
-        WHERE id = ?
-    `).run(tokens, Date.now(), id);
-}
-
-export function updateApiKeyStatus(id, status) {
-    getDatabase().prepare('UPDATE api_keys SET status = ? WHERE id = ?').run(status, id);
-}
-
-export function deleteApiKey(id) {
-    const db = getDatabase();
-    // 先将关联的日志记录的 api_key_id 设为 NULL
-    db.prepare('UPDATE request_logs SET api_key_id = NULL WHERE api_key_id = ?').run(id);
-    // 然后删除 API Key
-    db.prepare('DELETE FROM api_keys WHERE id = ?').run(id);
 }
 
 // ==================== Request Log 操作 ====================

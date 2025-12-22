@@ -2,7 +2,6 @@ import { verifyAdmin } from '../middleware/auth.js';
 import {
     getAllAccounts, getAccountById, createAccount, updateAccountStatus, deleteAccount,
     getAllAccountsForRefresh,
-    getAllApiKeys, createApiKey, updateApiKeyStatus, deleteApiKey,
     getRequestLogs, getRequestStats, getModelUsageStats,
     getSetting, setSetting
 } from '../db/index.js';
@@ -227,41 +226,6 @@ export default async function adminRoutes(fastify) {
             message: `Refreshed ${successCount}/${results.length} accounts (token + quota)`,
             results
         };
-    });
-
-    // ==================== API Key 管理 ====================
-
-    // GET /admin/api-keys
-    fastify.get('/admin/api-keys', async () => {
-        const keys = getAllApiKeys();
-        return { keys };
-    });
-
-    // POST /admin/api-keys
-    fastify.post('/admin/api-keys', async (request) => {
-        const { name } = request.body;
-        const key = createApiKey(name || 'New Key');
-        return { success: true, key };
-    });
-
-    // PUT /admin/api-keys/:id/status
-    fastify.put('/admin/api-keys/:id/status', async (request) => {
-        const { id } = request.params;
-        const { status } = request.body;
-
-        if (!['active', 'disabled'].includes(status)) {
-            return { error: { message: 'Invalid status' } };
-        }
-
-        updateApiKeyStatus(id, status);
-        return { success: true };
-    });
-
-    // DELETE /admin/api-keys/:id
-    fastify.delete('/admin/api-keys/:id', async (request) => {
-        const { id } = request.params;
-        deleteApiKey(id);
-        return { success: true };
     });
 
     // ==================== 请求日志 ====================

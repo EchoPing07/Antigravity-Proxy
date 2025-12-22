@@ -1,4 +1,4 @@
-import { verifyApiKey, recordApiKeyUsage } from '../middleware/auth.js';
+import { verifyApiKey } from '../middleware/auth.js';
 import { accountPool } from '../services/accountPool.js';
 import { acquireModelSlot, releaseModelSlot } from '../services/rateLimiter.js';
 import { streamChat, chat } from '../services/antigravity.js';
@@ -298,14 +298,14 @@ export default async function anthropicRoutes(fastify) {
         const { stream = false, model } = anthropicRequest;
 
         // 兼容：部分客户端不会传 metadata.user_id，但 Claude extended thinking 的 signature 回放/兜底逻辑需要一个稳定的 userKey。
-        // 这里用 API Key ID 作为 fallback，显著降低“多轮工具调用后 signature 丢失 -> thinking_downgrade”的概率。
+        // 统一 API_KEY 模式下用固定值作为 fallback（不要把真实 key 写进缓存/日志）。
         try {
             if (anthropicRequest && typeof anthropicRequest === 'object') {
                 const meta = (anthropicRequest.metadata && typeof anthropicRequest.metadata === 'object')
                     ? anthropicRequest.metadata
                     : {};
                 if (!meta.user_id) {
-                    anthropicRequest.metadata = { ...meta, user_id: `api_key:${request.apiKey?.id ?? 'unknown'}` };
+                    anthropicRequest.metadata = { ...meta, user_id: 'api_key:static' };
                 }
             }
         } catch {
@@ -625,7 +625,7 @@ export default async function anthropicRoutes(fastify) {
             const latencyMs = Date.now() - startTime;
             createRequestLog({
                 accountId: account?.id,
-                apiKeyId: request.apiKey?.id,
+                apiKeyId: null,
                 model,
                 promptTokens: usage?.promptTokens || 0,
                 completionTokens: usage?.completionTokens || 0,
@@ -635,11 +635,6 @@ export default async function anthropicRoutes(fastify) {
                 latencyMs,
                 errorMessage
             });
-
-            // 记录 API Key 使用量
-            if (request.apiKey && usage?.totalTokens) {
-                recordApiKeyUsage(request.apiKey.id, usage.totalTokens);
-            }
 
             // 只在「调用模型」时输出日志（Anthropic 格式：完整请求与响应）
             try {

@@ -1,4 +1,3 @@
-import { getApiKeyByKey, updateApiKeyUsage } from '../db/index.js';
 import { SERVER_CONFIG } from '../config.js';
 import { verifyToken } from '../routes/auth.js';
 
@@ -9,6 +8,19 @@ import { verifyToken } from '../routes/auth.js';
  * 2. x-api-key: <api_key> (Anthropic 格式)
  */
 export async function verifyApiKey(request, reply) {
+    const configuredKeyRaw = process.env.API_KEY;
+    const configuredKey = configuredKeyRaw ? String(configuredKeyRaw) : '';
+
+    if (!configuredKey) {
+        return reply.code(500).send({
+            error: {
+                message: 'Server misconfigured: API_KEY is not set',
+                type: 'api_error',
+                code: 'missing_api_key_config'
+            }
+        });
+    }
+
     const authHeader = request.headers.authorization;
     const xApiKey = request.headers['x-api-key'];
     const anthropicApiKey = request.headers['anthropic-api-key'];
@@ -65,9 +77,7 @@ export async function verifyApiKey(request, reply) {
         });
     }
 
-    const keyRecord = getApiKeyByKey(apiKey);
-
-    if (!keyRecord) {
+    if (apiKey !== configuredKey) {
         return reply.code(401).send({
             error: {
                 message: 'Invalid API key',
@@ -76,9 +86,6 @@ export async function verifyApiKey(request, reply) {
             }
         });
     }
-
-    // 将 API Key 信息附加到请求对象
-    request.apiKey = keyRecord;
 }
 
 /**
@@ -131,11 +138,4 @@ export async function verifyAdmin(request, reply) {
     }
 }
 
-/**
- * 记录 API Key 使用量
- */
-export function recordApiKeyUsage(apiKeyId, tokens) {
-    if (apiKeyId && tokens > 0) {
-        updateApiKeyUsage(apiKeyId, tokens);
-    }
-}
+// API Keys 已移除：不再提供 recordApiKeyUsage

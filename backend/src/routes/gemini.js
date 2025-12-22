@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 
-import { verifyApiKey, recordApiKeyUsage } from '../middleware/auth.js';
+import { verifyApiKey } from '../middleware/auth.js';
 import { accountPool } from '../services/accountPool.js';
 import { acquireModelSlot, releaseModelSlot } from '../services/rateLimiter.js';
 import { streamChat, chat, countTokens, fetchAvailableModels } from '../services/antigravity.js';
@@ -474,7 +474,7 @@ export default async function geminiRoutes(fastify) {
                 const latencyMs = Date.now() - startTime;
                 createRequestLog({
                     accountId: account?.id,
-                    apiKeyId: request.apiKey?.id,
+                    apiKeyId: null,
                     model,
                     promptTokens: usage?.promptTokens || 0,
                     completionTokens: usage?.completionTokens || 0,
@@ -484,10 +484,6 @@ export default async function geminiRoutes(fastify) {
                     latencyMs,
                     errorMessage
                 });
-
-                if (request.apiKey && usage?.totalTokens) {
-                    recordApiKeyUsage(request.apiKey.id, usage.totalTokens);
-                }
 
                 try {
                     if (invokedUpstream) {

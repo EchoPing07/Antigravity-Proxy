@@ -1,4 +1,4 @@
-import { verifyApiKey, recordApiKeyUsage } from '../middleware/auth.js';
+import { verifyApiKey } from '../middleware/auth.js';
 import { accountPool } from '../services/accountPool.js';
 import { acquireModelSlot, releaseModelSlot } from '../services/rateLimiter.js';
 import { streamChat, chat } from '../services/antigravity.js';
@@ -278,7 +278,7 @@ export default async function openaiRoutes(fastify) {
             const latencyMs = Date.now() - startTime;
             createRequestLog({
                 accountId: account?.id,
-                apiKeyId: request.apiKey?.id,
+                apiKeyId: null,
                 model,
                 promptTokens: usage?.promptTokens || 0,
                 completionTokens: usage?.completionTokens || 0,
@@ -288,11 +288,6 @@ export default async function openaiRoutes(fastify) {
                 latencyMs,
                 errorMessage
             });
-
-            // 记录 API Key 使用量
-            if (request.apiKey && usage?.totalTokens) {
-                recordApiKeyUsage(request.apiKey.id, usage.totalTokens);
-            }
 
             // 只在「调用模型」时输出日志（OpenAI 格式：完整请求与响应）
             try {
