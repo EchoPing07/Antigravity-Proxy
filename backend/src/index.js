@@ -43,11 +43,24 @@ await fastify.register(cors, {
 });
 
 // 注册静态文件服务（前端）
-const frontendPath = join(__dirname, '../../frontend/dist');
-const hasFrontendDist = existsSync(frontendPath);
-if (hasFrontendDist) {
+const staticPathCandidates = [
+    // 新版：纯静态管理面板（无需构建）
+    join(__dirname, '../public'),
+    // 兼容旧版：Vue build 产物
+    join(__dirname, '../../frontend/dist')
+];
+
+let staticRoot = null;
+for (const p of staticPathCandidates) {
+    if (existsSync(join(p, 'index.html'))) {
+        staticRoot = p;
+        break;
+    }
+}
+
+if (staticRoot) {
     await fastify.register(fastifyStatic, {
-        root: frontendPath,
+        root: staticRoot,
         prefix: '/'
     });
 
