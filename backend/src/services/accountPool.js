@@ -1,6 +1,16 @@
 import { getActiveAccounts, updateAccountLastUsed, updateAccountStatus, updateAccountQuota } from '../db/index.js';
 import { ensureValidToken, fetchQuotaInfo } from './tokenManager.js';
 
+function parseBoolean(value, defaultValue = false) {
+    if (value === undefined || value === null || value === '') return defaultValue;
+    const v = String(value).trim().toLowerCase();
+    if (['1', 'true', 'yes', 'y', 'on'].includes(v)) return true;
+    if (['0', 'false', 'no', 'n', 'off'].includes(v)) return false;
+    return defaultValue;
+}
+
+const DISABLE_LOCAL_LIMITS = parseBoolean(process.env.DISABLE_LOCAL_LIMITS, false);
+
 // 每个账号允许的最大并发请求数（防止单号被打爆）
 const MAX_CONCURRENT_PER_ACCOUNT = Number(process.env.MAX_CONCURRENT_PER_ACCOUNT || 1);
 // 容量耗尽后的默认冷却时间（毫秒），如果上游返回了具体秒数，会在此基础上调整
@@ -46,13 +56,15 @@ class AccountPool {
         // 尝试找到一个可用的账号
         for (const account of accounts) {
             // 检查账号并发是否已满
-            const lockCount = this.accountLocks.get(account.id) || 0;
-            if (lockCount >= MAX_CONCURRENT_PER_ACCOUNT) {
-                continue;
+            if (!DISABLE_LOCAL_LIMITS && Number.isFinite(MAX_CONCURRENT_PER_ACCOUNT) && MAX_CONCURRENT_PER_ACCOUNT > 0) {
+                const lockCount = this.accountLocks.get(account.id) || 0;
+                if (lockCount >= MAX_CONCURRENT_PER_ACCOUNT) {
+                    continue;
+                }
             }
 
             // 检查是否处于容量冷却期
-            if (model && this.isAccountInCooldown(account.id, model)) {
+            if (!DISABLE_LOCAL_LIMITS && model && this.isAccountInCooldown(account.id, model)) {
                 continue;
             }
 
@@ -124,6 +136,8 @@ class AccountPool {
      * 锁定账号（防止并发使用同一账号）
      */
     lockAccount(accountId) {
+        if (DISABLE_LOCAL_LIMITS) return;
+        if (Number.isFinite(MAX_CONCURRENT_PER_ACCOUNT) && MAX_CONCURRENT_PER_ACCOUNT <= 0) return;
         const current = this.accountLocks.get(accountId) || 0;
         this.accountLocks.set(accountId, current + 1);
     }
@@ -132,6 +146,8 @@ class AccountPool {
      * 解锁账号
      */
     unlockAccount(accountId) {
+        if (DISABLE_LOCAL_LIMITS) return;
+        if (Number.isFinite(MAX_CONCURRENT_PER_ACCOUNT) && MAX_CONCURRENT_PER_ACCOUNT <= 0) return;
         const current = this.accountLocks.get(accountId) || 0;
         if (current <= 1) {
             this.accountLocks.delete(accountId);
@@ -144,6 +160,7 @@ class AccountPool {
      * 标记账号在某个模型上容量耗尽，进入短暂冷却期
      */
     markCapacityLimited(accountId, model, message) {
+        if (DISABLE_LOCAL_LIMITS) return;
         if (!accountId || !model) return;
 
         let cooldownMs = CAPACITY_COOLDOWN_DEFAULT_MS;
@@ -178,6 +195,7 @@ class AccountPool {
      * 成功调用后清除该模型的容量错误退避计数
      */
     markCapacityRecovered(accountId, model) {
+        if (DISABLE_LOCAL_LIMITS) return;
         if (!accountId || !model) return;
         const key = `${accountId}:${model}`;
         this.capacityErrorCounts.delete(key);
@@ -187,6 +205,7 @@ class AccountPool {
      * 检查账号在某个模型上是否处于冷却期
      */
     isAccountInCooldown(accountId, model) {
+        if (DISABLE_LOCAL_LIMITS) return false;
         if (!accountId || !model) return false;
         const key = `${accountId}:${model}`;
         const until = this.capacityCooldowns.get(key);
