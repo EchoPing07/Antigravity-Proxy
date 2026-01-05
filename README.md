@@ -26,7 +26,26 @@
 
 ## 快速开始
 
-### Docker 部署（推荐）
+### 使用预构建镜像（推荐）
+
+无需克隆代码，直接拉取镜像运行：
+
+```bash
+# 1. 下载配置文件
+curl -O https://raw.githubusercontent.com/Kazuki-0147/Antigravity-Proxy/main/docker-compose.ghcr.yml
+
+# 2. 启动
+docker-compose -f docker-compose.ghcr.yml up -d
+```
+
+更新到最新版本：
+
+```bash
+docker-compose -f docker-compose.ghcr.yml pull
+docker-compose -f docker-compose.ghcr.yml up -d
+```
+
+### 从源码构建
 
 ```bash
 # 1. 克隆项目
