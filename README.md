@@ -91,8 +91,10 @@ curl http://localhost:8088/v1beta/models/gemini-2.5-flash:generateContent \
 | `PORT` | 8088 | 服务端口 |
 | `ADMIN_PASSWORD` | - | 管理面板密码 |
 | `API_KEY` | - | API 访问密钥（留空则使用 ADMIN_PASSWORD） |
-| `MAX_CONCURRENT_PER_MODEL` | 2 | 单模型并发上限 |
-| `MAX_CONCURRENT_PER_ACCOUNT` | 1 | 单账号并发上限 |
+| `MAX_CONCURRENT_PER_MODEL` | 0 | 单模型并发上限（0=不限制） |
+| `MAX_CONCURRENT_PER_ACCOUNT` | 0 | 单账号并发上限（0=不限制） |
+| `SAME_ACCOUNT_RETRIES` | 2 | 同号重试次数 |
+| `ERROR_COUNT_TO_DISABLE` | 3 | 连续失败多少次才禁用账号 |
 | `OUTBOUND_PROXY` | - | 出站代理（如 `http://127.0.0.1:7890`） |
 
 完整环境变量说明见 `.env.example`。
@@ -115,9 +117,9 @@ antigravity-proxy/
 
 **Q: 出现 `Resource has been exhausted` 错误？**
 
-这是上游账号的速率限制，非配额问题。可以：
-- 降低并发：减小 `MAX_CONCURRENT_PER_MODEL`
+这是上游账号的速率限制，非配额问题。代理会自动等待冷却时间后重试。如果频繁出现，可以：
 - 增加账号：让账号池有更多选择
+- 调整重试次数：增大 `SAME_ACCOUNT_RETRIES`
 
 **Q: Claude Code 工具调用报错？**
 
