@@ -3,6 +3,22 @@ import fs from 'fs';
 
 const BASE_URL = ANTIGRAVITY_CONFIG.base_url;
 const USER_AGENT = ANTIGRAVITY_CONFIG.user_agent;
+
+/**
+ * 判断模型是否需要伪非流式（上游已关闭这些模型的非流式端点）
+ * - Claude 系列
+ * - Gemini 3 Pro 系列
+ */
+function needsFakeNonStreaming(model) {
+    if (!model) return false;
+    const m = model.toLowerCase();
+    // Claude 系列
+    if (m.includes('claude')) return true;
+    // Gemini 3 Pro 系列
+    if (m.includes('gemini-3-pro')) return true;
+    return false;
+}
+
 const UPSTREAM_REQUEST_CAPTURE_ENABLED = (() => {
     const raw = process.env.UPSTREAM_REQUEST_CAPTURE;
     if (raw === undefined || raw === null || raw === '') return false;
@@ -195,9 +211,125 @@ export async function streamChat(account, request, onData, onError, signal = nul
 }
 
 /**
+ * 伪非流式：通过流式端点收集数据，组装成非流式响应
+ * 用于上游已关闭非流式端点的模型（Claude、Gemini 3 Pro）
+ */
+async function streamChatCollect(account, request) {
+    const chunks = [];
+    let streamError = null;
+
+    await streamChat(
+        account,
+        request,
+        (data) => {
+            try {
+                const parsed = JSON.parse(data);
+                chunks.push(parsed);
+            } catch {
+                // ignore parse errors
+            }
+        },
+        (error) => {
+            streamError = error;
+        }
+    );
+
+    if (streamError) {
+        throw streamError;
+    }
+
+    if (chunks.length === 0) {
+        throw new Error('Upstream returned empty response (no chunks)');
+    }
+
+    // 合并所有 chunks 成一个完整的非流式响应
+    // 上游 SSE 格式: { response: { candidates: [...], usageMetadata: {...} } }
+    // part 格式: { thought: true/false, text: "content" } 或 { text: "content" } 或 { functionCall: {...} }
+    const mergedParts = [];
+    let finalUsageMetadata = null;
+    let finalFinishReason = null;
+    let finalCandidate = null;
+
+    for (const chunk of chunks) {
+        const candidate = chunk?.response?.candidates?.[0];
+        if (candidate) {
+            finalCandidate = candidate;
+            const parts = candidate?.content?.parts;
+            if (Array.isArray(parts)) {
+                for (const part of parts) {
+                    const isThinking = !!part.thought;
+
+                    if (part.text !== undefined) {
+                        // 查找同类型的 part（thinking 或非 thinking）来追加
+                        const lastPart = mergedParts[mergedParts.length - 1];
+                        const lastIsThinking = lastPart && !!lastPart.thought;
+
+                        if (lastPart && lastPart.text !== undefined && isThinking === lastIsThinking) {
+                            // 同类型，追加文本
+                            lastPart.text += part.text;
+                        } else {
+                            // 不同类型或第一个，创建新 part
+                            mergedParts.push({ ...part });
+                        }
+                    } else if (part.functionCall) {
+                        // functionCall 直接添加
+                        mergedParts.push({ ...part });
+                    } else if (part.inlineData) {
+                        // inlineData 直接添加
+                        mergedParts.push({ ...part });
+                    }
+                }
+            }
+            if (candidate.finishReason) {
+                finalFinishReason = candidate.finishReason;
+            }
+        }
+        // 使用最后一个 chunk 的 usageMetadata
+        if (chunk?.response?.usageMetadata) {
+            finalUsageMetadata = chunk.response.usageMetadata;
+        }
+    }
+
+    // 过滤掉空的 text parts（保留有内容的 text、thought、functionCall 等）
+    const filteredParts = mergedParts.filter(p => {
+        // 保留非 text 类型的 parts
+        if (p.functionCall || p.inlineData) return true;
+        // 保留 thinking parts（即使 text 为空）
+        if (p.thought) return true;
+        // 只保留有内容的 text parts
+        if (p.text !== undefined) return p.text !== '';
+        return true;
+    });
+
+    // 组装成与原生非流式响应相同的格式
+    return {
+        response: {
+            candidates: [{
+                content: {
+                    parts: filteredParts.length > 0 ? filteredParts : mergedParts,
+                    role: finalCandidate?.content?.role || 'model'
+                },
+                finishReason: finalFinishReason || 'STOP',
+                ...(finalCandidate?.groundingMetadata && { groundingMetadata: finalCandidate.groundingMetadata })
+            }],
+            usageMetadata: finalUsageMetadata || {},
+            modelVersion: chunks[0]?.response?.modelVersion
+        }
+    };
+}
+
+/**
  * 非流式聊天请求
+ * 对于上游已关闭非流式端点的模型（Claude、Gemini 3 Pro），自动使用伪非流式
  */
 export async function chat(account, request) {
+    // 检查是否需要伪非流式
+    const model = request?.request?.model || request?.model || '';
+    if (needsFakeNonStreaming(model)) {
+        return streamChatCollect(account, request);
+    }
+
+    // 原生非流式请求
     const url = `${BASE_URL}/v1internal:generateContent`;
 
     captureUpstreamRequest('chat', url, request);
