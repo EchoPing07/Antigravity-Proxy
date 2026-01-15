@@ -24,6 +24,13 @@ const DEBUG_CLAUDE_THINKING_SIGNATURE = (() => {
     return ['1', 'true', 'yes', 'y', 'on'].includes(v);
 })();
 
+const DEBUG_IMAGE_MIME = (() => {
+    const raw = process.env.DEBUG_IMAGE_MIME;
+    if (raw === undefined || raw === null || raw === '') return false;
+    const v = String(raw).trim().toLowerCase();
+    return ['1', 'true', 'yes', 'y', 'on'].includes(v);
+})();
+
 // Whether to persist lastSig -> tool_use_id when we have to fall back (potentially polluting).
 // Default behavior:
 // - enabled, but DO NOT write back for userKey='api_key:static' unless explicitly allowed.
@@ -45,6 +52,101 @@ function shouldWritebackClaudeLastSig(userKey) {
     if (!userKey) return false;
     if (String(userKey) === 'api_key:static' && !CLAUDE_LAST_SIG_WRITEBACK_ALLOW_STATIC) return false;
     return true;
+}
+
+function normalizeImageMediaType(mediaType) {
+    if (!mediaType) return null;
+    const t = String(mediaType).trim().toLowerCase();
+    // Common aliases
+    if (t === 'image/jpg') return 'image/jpeg';
+    if (t === 'image/pjpeg') return 'image/jpeg';
+    if (t === 'image/x-png') return 'image/png';
+    return t;
+}
+
+function extractDataUrlBase64(data) {
+    if (!data || typeof data !== 'string') return { mimeType: null, base64: null };
+    const s = data.trim();
+    if (!s.startsWith('data:')) return { mimeType: null, base64: null };
+    const m = s.match(/^data:([^;]+);base64,(.*)$/i);
+    if (!m) return { mimeType: null, base64: null };
+    return { mimeType: normalizeImageMediaType(m[1]), base64: m[2] };
+}
+
+function normalizeBase64Data(value) {
+    if (value === undefined || value === null) return '';
+    let s = String(value).trim();
+    const extracted = extractDataUrlBase64(s);
+    if (extracted.base64) s = extracted.base64;
+    // Remove whitespace/newlines and normalize URL-safe base64.
+    s = s.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    // Ensure padding when possible.
+    const mod = s.length % 4;
+    if (mod === 2) s += '==';
+    else if (mod === 3) s += '=';
+    return s;
+}
+
+function sniffImageMimeTypeFromBase64(base64Data) {
+    if (!base64Data) return null;
+    const s = String(base64Data);
+    // Decode only a prefix for magic-byte sniffing (avoid large allocations).
+    const prefix = s.slice(0, 256);
+    let buf = null;
+    try {
+        buf = Buffer.from(prefix, 'base64');
+    } catch {
+        return null;
+    }
+    if (!buf || buf.length < 12) return null;
+    // JPEG: FF D8 FF
+    if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if (
+        buf[0] === 0x89 &&
+        buf[1] === 0x50 &&
+        buf[2] === 0x4e &&
+        buf[3] === 0x47 &&
+        buf[4] === 0x0d &&
+        buf[5] === 0x0a &&
+        buf[6] === 0x1a &&
+        buf[7] === 0x0a
+    ) {
+        return 'image/png';
+    }
+    const ascii0_12 = buf.toString('ascii', 0, 12);
+    if (ascii0_12.startsWith('GIF87a') || ascii0_12.startsWith('GIF89a')) return 'image/gif';
+    // WEBP: RIFF....WEBP
+    if (ascii0_12.startsWith('RIFF') && buf.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+    return null;
+}
+
+function normalizeIncomingAnthropicImageBase64({ media_type, data }, ctx = {}) {
+    const declared = normalizeImageMediaType(media_type);
+    const extracted = extractDataUrlBase64(data);
+    const dataUrlMime = extracted.mimeType;
+    const normalizedData = normalizeBase64Data(data);
+    const sniffed = sniffImageMimeTypeFromBase64(normalizedData);
+
+    let mimeType = declared || dataUrlMime || sniffed || null;
+    if (sniffed && mimeType && sniffed !== mimeType) {
+        if (DEBUG_IMAGE_MIME) {
+            try {
+                console.warn(JSON.stringify({
+                    kind: 'image_mime_mismatch',
+                    phase: 'anthropic_to_antigravity_image',
+                    userKey: ctx?.userKey || null,
+                    declared: declared || null,
+                    dataUrlMime: dataUrlMime || null,
+                    sniffed,
+                    final: sniffed
+                }));
+            } catch { /* ignore */ }
+        }
+        mimeType = sniffed;
+    }
+
+    return { mimeType, data: normalizedData };
 }
 
 // ==================== Anthropic 格式转换 ====================
@@ -565,10 +667,11 @@ function convertAnthropicMessage(msg, thinkingEnabled = false, ctx = {}) {
             // 处理图片
             if (item.type === 'image') {
                 if (item.source?.type === 'base64') {
+                    const fixed = normalizeIncomingAnthropicImageBase64(item.source, { userKey });
                     regularParts.push({
                         inlineData: {
-                            mimeType: item.source.media_type,
-                            data: item.source.data
+                            mimeType: fixed.mimeType || item.source.media_type,
+                            data: fixed.data || item.source.data
                         }
                     });
                 }
