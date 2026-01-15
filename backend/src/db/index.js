@@ -199,6 +199,8 @@ export function deleteAccount(id) {
     // 先将关联的日志记录的 account_id 设为 NULL
     db.prepare('UPDATE request_logs SET account_id = NULL WHERE account_id = ?').run(id);
     db.prepare('UPDATE request_attempt_logs SET account_id = NULL WHERE account_id = ?').run(id);
+    // 删除账号-模型配额记录
+    db.prepare('DELETE FROM account_model_quotas WHERE account_id = ?').run(id);
     // 然后删除账号
     db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
 }

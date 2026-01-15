@@ -87,24 +87,35 @@ class App {
     const pageContent = document.getElementById('pageContent');
     if (!pageContent) return;
 
-    // 渲染对应页面
-    switch (tab) {
-      case 'dashboard':
-        this._currentPage = new Dashboard(pageContent);
-        break;
-      case 'accounts':
-        this._currentPage = new AccountsPage(pageContent);
-        break;
-      case 'logs':
-        this._currentPage = new LogsPage(pageContent);
-        break;
-      default:
-        this._currentPage = new Dashboard(pageContent);
-    }
+    // 添加淡出效果
+    pageContent.classList.add('page-exit');
+    pageContent.classList.remove('page-enter');
 
-    if (this._currentPage) {
-      this._currentPage.mount();
-    }
+    // 等待淡出完成后切换内容
+    setTimeout(() => {
+      // 渲染对应页面
+      switch (tab) {
+        case 'dashboard':
+          this._currentPage = new Dashboard(pageContent);
+          break;
+        case 'accounts':
+          this._currentPage = new AccountsPage(pageContent);
+          break;
+        case 'logs':
+          this._currentPage = new LogsPage(pageContent);
+          break;
+        default:
+          this._currentPage = new Dashboard(pageContent);
+      }
+
+      if (this._currentPage) {
+        this._currentPage.mount();
+      }
+
+      // 添加淡入效果
+      pageContent.classList.remove('page-exit');
+      pageContent.classList.add('page-enter');
+    }, 150);
   }
 
   /**

@@ -1,7 +1,3 @@
-/**
- * 账号管理页面组件
- */
-
 import { Component } from '../../core/component.js';
 import { store } from '../../core/store.js';
 import { commands } from '../../commands/index.js';
@@ -9,54 +5,103 @@ import { formatTime } from '../../utils/format.js';
 import { toast } from '../../ui/toast.js';
 
 export class AccountsPage extends Component {
+  constructor(container) {
+    super(container);
+  }
+
   render() {
-    const { list, loading, refreshingAll } = store.get('accounts') || {};
+    const { list, loading, refreshingAll, selectedIds = [] } = store.get('accounts') || {};
     const accounts = list || [];
+
+    const stats = this._calcStats(accounts);
+    const selectedCount = selectedIds.length;
+    const allSelected = accounts.length > 0 && selectedCount === accounts.length;
+
+    // 计算选中账号的状态分布
+    const selectedAccounts = accounts.filter(a => selectedIds.includes(String(a.id)));
+    const hasActiveSelected = selectedAccounts.some(a => a.status === 'active');
+    const hasDisabledSelected = selectedAccounts.some(a => a.status !== 'active');
 
     return `
       <div class="accounts-page">
+        <div class="stats-grid mb-4">
+          ${this._renderStatCard('总账号', stats.total, '全部账号数量')}
+          ${this._renderStatCard('活跃', stats.active, '正常运行中', 'text-success')}
+          ${this._renderStatCard('禁用', stats.disabled, '手动禁用', 'text-warning')}
+          ${this._renderStatCard('异常', stats.error, '需要检查', stats.error > 0 ? 'text-danger' : '')}
+        </div>
+
         <div class="card mb-4">
-          <div class="flex justify-between items-center mb-4">
-            <span class="text-secondary">共 ${accounts.length} 个账号</span>
-            <div class="flex gap-2">
-              <button class="btn btn-primary btn-sm" data-cmd="oauth:open">
-                + OAuth 添加
-              </button>
-              <button class="btn btn-sm" data-cmd="import:open">
-                📥 导入
-              </button>
-              <button class="btn btn-sm" data-cmd="accounts:export">
-                📦 导出全部
-              </button>
-              <button class="btn btn-sm" data-cmd="accounts:refresh-all" ${refreshingAll ? 'disabled' : ''}>
-                ${refreshingAll ? '<span class="spinner"></span>' : ''} 刷新全部
-              </button>
+          <div class="accounts-toolbar">
+            <div class="accounts-toolbar-left">
+              <span class="text-secondary">共 ${accounts.length} 个账号</span>
+              ${selectedCount > 0 ? `<span class="selection-count">已选 ${selectedCount} 个</span>` : ''}
+            </div>
+            <div class="accounts-toolbar-actions">
+              ${selectedCount > 0 ? `
+                <button class="btn btn-sm btn-danger" data-cmd="accounts:batch-delete">
+                  删除 (${selectedCount})
+                </button>
+                ${hasActiveSelected ? `
+                <button class="btn btn-sm btn-warning" data-cmd="accounts:batch-toggle" data-status="disabled">
+                  禁用 (${selectedCount})
+                </button>
+                ` : ''}
+                ${hasDisabledSelected ? `
+                <button class="btn btn-sm btn-success" data-cmd="accounts:batch-toggle" data-status="active">
+                  启用 (${selectedCount})
+                </button>
+                ` : ''}
+                <button class="btn btn-sm" data-cmd="accounts:batch-refresh">
+                  刷新 (${selectedCount})
+                </button>
+                <button class="btn btn-sm" data-cmd="accounts:batch-export">
+                  导出 (${selectedCount})
+                </button>
+                <button class="btn btn-sm" data-cmd="accounts:clear-selection">
+                  取消选择
+                </button>
+              ` : `
+                <button class="btn btn-primary btn-sm" data-cmd="oauth:open">
+                  + OAuth 添加
+                </button>
+                <button class="btn btn-sm" data-cmd="import:open">
+                  📥 导入
+                </button>
+                <button class="btn btn-sm" data-cmd="accounts:refresh-all" ${refreshingAll ? 'disabled' : ''}>
+                  ${refreshingAll ? '<span class="spinner"></span>' : ''} 刷新全部
+                </button>
+              `}
             </div>
           </div>
+        </div>
 
-          <!-- 账号列表 -->
+        <div class="card">
           <div class="table-wrapper">
-            <table class="table">
+            <table class="table accounts-table">
               <thead>
                 <tr>
-                  <th>ID</th>
-                  <th>Email</th>
-                  <th>状态</th>
+                  <th style="width:40px">
+                    <input type="checkbox"
+                           class="account-checkbox"
+                           data-action="select-all"
+                           ${allSelected ? 'checked' : ''} />
+                  </th>
+                  <th>邮箱</th>
                   <th>层级</th>
                   <th>配额</th>
-                  <th>错误</th>
+                  <th>状态</th>
                   <th>最后使用</th>
                   <th>操作</th>
                 </tr>
               </thead>
               <tbody>
-                ${this._renderRows(accounts, loading)}
+                ${this._renderAccountRows(accounts, loading, selectedIds)}
               </tbody>
             </table>
           </div>
         </div>
-        
-        <!-- Dialogs 必须在同一个顶级容器内，否则 _patchDOM 无法更新它们 -->
+
         ${this._renderOAuthDialog()}
         ${this._renderQuotaDialog()}
         ${this._renderImportDialog()}
@@ -64,12 +109,32 @@ export class AccountsPage extends Component {
     `;
   }
 
-  _renderRows(accounts, loading) {
+  _calcStats(accounts) {
+    return {
+      total: accounts.length,
+      active: accounts.filter(a => a.status === 'active').length,
+      disabled: accounts.filter(a => a.status === 'disabled').length,
+      error: accounts.filter(a => a.status === 'error').length
+    };
+  }
+
+  _renderStatCard(title, value, subtitle, valueClass = '') {
+    return `
+      <div class="card">
+        <div class="card-title">${this._escape(title)}</div>
+        <div class="card-value ${valueClass}">${value}</div>
+        <div class="card-subtitle">${this._escape(subtitle)}</div>
+      </div>
+    `;
+  }
+
+  _renderAccountRows(accounts, loading, selectedIds) {
     if (loading && accounts.length === 0) {
       return `
         <tr>
-          <td colspan="8" class="text-center" style="padding:48px">
-            <div class="spinner"></div>
+          <td colspan="7" class="text-center" style="padding:48px">
+            <div class="spinner spinner-lg"></div>
+            <div style="margin-top:12px">正在加载...</div>
           </td>
         </tr>
       `;
@@ -78,77 +143,111 @@ export class AccountsPage extends Component {
     if (accounts.length === 0) {
       return `
         <tr>
-          <td colspan="8" class="text-center text-secondary" style="padding:48px">
+          <td colspan="7" class="text-center text-secondary" style="padding:48px">
             暂无账号
           </td>
         </tr>
       `;
     }
 
-    return accounts.map(a => this._renderAccountRow(a)).join('');
+    return accounts.map(a => this._renderAccountRow(a, selectedIds)).join('');
   }
 
-  _renderAccountRow(a) {
+  _renderAccountRow(a, selectedIds) {
     const status = a.status || 'unknown';
-    const badgeClass = {
-      active: 'badge-success',
-      disabled: 'badge-warning',
-      error: 'badge-danger'
-    }[status] || 'badge-neutral';
+    const isSelected = selectedIds.includes(String(a.id));
+
+    const statusClass = {
+      active: 'status-active',
+      disabled: 'status-disabled',
+      error: 'status-error'
+    }[status] || 'status-unknown';
 
     const statusText = {
       active: '正常',
-      disabled: '已禁用',
+      disabled: '禁用',
       error: '异常'
     }[status] || '未知';
 
+    // 层级显示优化
+    const tierRaw = (a.tier || '').toLowerCase();
+    const tierDisplay = {
+      'standard-tier': 'Standard',
+      'pay-as-you-go': 'PayG',
+      'free-tier': 'Free',
+      'enterprise': 'Enterprise'
+    }[tierRaw] || (a.tier ? a.tier.replace(/-tier$/i, '') : '-');
+
+    const tierClass = {
+      'standard-tier': 'badge-tier-standard',
+      'pay-as-you-go': 'badge-tier-payg',
+      'free-tier': 'badge-tier-free',
+      'enterprise': 'badge-tier-enterprise'
+    }[tierRaw] || 'badge-neutral';
+
     const quota = typeof a.quota_remaining === 'number'
-      ? a.quota_remaining.toFixed(2)
+      ? (a.quota_remaining * 100).toFixed(0) + '%'
       : '-';
 
+    const quotaClass = typeof a.quota_remaining === 'number'
+      ? (a.quota_remaining < 0.3 ? 'text-danger' : a.quota_remaining < 0.6 ? 'text-warning' : 'text-success')
+      : '';
+
     return `
-      <tr data-account-id="${a.id}">
-        <td class="mono" data-label="ID">${this._escape(a.id)}</td>
-        <td data-label="Email">${this._escape(a.email)}</td>
-        <td data-label="状态"><span class="badge ${badgeClass}">${statusText}</span></td>
-        <td class="mono" data-label="层级">${this._escape(a.tier || '-')}</td>
-        <td class="mono" data-label="配额">${quota}</td>
-        <td class="mono ${a.error_count > 0 ? 'text-danger' : ''}" data-label="错误">${a.error_count || 0}</td>
-        <td class="mono" data-label="最后使用" style="font-size:11px">${formatTime(a.last_used_at)}</td>
-<td data-label="操作">
-            <div class="actions">
-              <button class="btn btn-sm btn-icon" 
-                      data-cmd="accounts:refresh" 
-                      data-id="${a.id}" 
-                      title="刷新 Token">↻</button>
-              <button class="btn btn-sm btn-icon" 
-                      data-cmd="accounts:view-quota" 
-                      data-id="${a.id}" 
-                      title="查看配额">📊</button>
-              <button class="btn btn-sm btn-icon" 
-                      data-cmd="accounts:export-single" 
-                      data-id="${a.id}" 
-                      title="导出 Token">📤</button>
-              <button class="btn btn-sm ${status === 'active' ? 'btn-danger' : ''}" 
-                      data-cmd="accounts:toggle-status" 
-                      data-id="${a.id}" 
-                      data-status="${status}">
-                ${status === 'active' ? '禁用' : '启用'}
-              </button>
-              <button class="btn btn-sm btn-danger btn-icon" 
-                      data-cmd="accounts:delete" 
-                      data-id="${a.id}"
-                      data-email="${this._escape(a.email)}"
-                      title="删除">✕</button>
-            </div>
-          </td>
+      <tr class="${isSelected ? 'row-selected' : ''} ${status === 'disabled' ? 'row-disabled' : ''}">
+        <td>
+          <input type="checkbox"
+                 class="account-checkbox"
+                 data-action="select"
+                 data-id="${a.id}"
+                 ${isSelected ? 'checked' : ''} />
+        </td>
+        <td>
+          <div class="account-email-cell">
+            <span class="account-email">${this._escape(a.email)}</span>
+          </div>
+        </td>
+        <td>
+          <span class="badge ${tierClass}">${this._escape(tierDisplay)}</span>
+        </td>
+        <td>
+          <span class="quota-value ${quotaClass}">${quota}</span>
+        </td>
+        <td>
+          <span class="status-indicator ${statusClass}">${statusText}</span>
+        </td>
+        <td class="mono" style="font-size:12px">
+          ${formatTime(a.last_used_at)}
+        </td>
+        <td>
+          <div class="row-actions">
+            <button class="btn btn-sm btn-icon" title="配额详情" data-cmd="accounts:view-quota" data-id="${a.id}">
+              📊
+            </button>
+            <button class="btn btn-sm btn-icon" title="刷新" data-cmd="accounts:refresh" data-id="${a.id}">
+              ↻
+            </button>
+            <button class="btn btn-sm btn-icon" title="${status === 'active' ? '禁用' : '启用'}"
+                    data-cmd="accounts:toggle-status"
+                    data-id="${a.id}"
+                    data-status="${status}">
+              ${status === 'active' ? '⏸' : '▶'}
+            </button>
+            <button class="btn btn-sm btn-icon btn-danger" title="删除"
+                    data-cmd="accounts:delete"
+                    data-id="${a.id}"
+                    data-email="${this._escape(a.email)}">
+              ✕
+            </button>
+          </div>
+        </td>
       </tr>
     `;
   }
 
   _renderOAuthDialog() {
     const oauth = store.get('dialogs.oauth') || {};
-    const { port, step } = oauth;
+    const { port } = oauth;
 
     return `
       <dialog id="oauthDialog">
@@ -157,7 +256,7 @@ export class AccountsPage extends Component {
           <div class="dialog-subtitle">通过 Google 授权添加 Gemini API 账号</div>
         </div>
         <div class="dialog-body">
-          <div class="flex gap-3 items-center mb-4" 
+          <div class="flex gap-3 items-center mb-4"
                style="padding:16px; background:var(--color-surface-2); border-radius:var(--radius-md)">
             <button class="btn btn-primary" data-cmd="oauth:start">
               1. 打开授权页面
@@ -170,8 +269,8 @@ export class AccountsPage extends Component {
             <label class="form-label">
               2. 粘贴浏览器地址栏的回调 URL（即使页面打不开也没关系）
             </label>
-            <textarea id="oauthCallback" 
-                      class="form-textarea" 
+            <textarea id="oauthCallback"
+                      class="form-textarea"
                       placeholder="http://localhost:xxxxx/oauth-callback?code=..."></textarea>
           </div>
         </div>
@@ -183,9 +282,9 @@ export class AccountsPage extends Component {
     `;
   }
 
-_renderQuotaDialog() {
+  _renderQuotaDialog() {
     const quota = store.get('dialogs.quota') || {};
-    const { open, account, data, loading } = quota;
+    const { account, data, loading } = quota;
 
     let content = '';
     if (loading) {
@@ -203,12 +302,14 @@ _renderQuotaDialog() {
         : null;
       const overallText = overallQuota === null ? '-' : `${(overallQuota * 100).toFixed(2)}%`;
       const overallReset = this._escape(formatTime(quotaData?.resetTime));
+      const overallColorClass = overallQuota === null ? ''
+        : (overallQuota < 0.3 ? 'text-danger' : overallQuota < 0.6 ? 'text-warning' : 'text-success');
 
       const summary = `
         <div class="quota-summary">
           <div class="quota-card">
             <div class="quota-card-label">总体剩余</div>
-            <div class="quota-card-value">${this._escape(overallText)}</div>
+            <div class="quota-card-value ${overallColorClass}">${this._escape(overallText)}</div>
           </div>
           <div class="quota-card">
             <div class="quota-card-label">最近重置</div>
@@ -312,7 +413,7 @@ _renderQuotaDialog() {
               文件导入
             </button>
           </div>
-          
+
           <div class="import-content">
             ${tab === 'manual' ? this._renderManualImportForm() : this._renderFileImportForm()}
           </div>
@@ -359,7 +460,7 @@ _renderQuotaDialog() {
     `;
   }
 
-onMount() {
+  onMount() {
     this.watch(['accounts', 'dialogs.oauth', 'dialogs.quota', 'dialogs.import']);
   }
 
@@ -380,19 +481,35 @@ onMount() {
     }
   }
 
-_bindEvents() {
+  _bindEvents() {
+    // 命令按钮点击
     this.delegate('click', '[data-cmd]', (e, target) => {
       const cmd = target.dataset.cmd;
       const id = target.dataset.id;
       const status = target.dataset.status;
       const email = target.dataset.email;
 
-      commands.dispatch(cmd, { id, currentStatus: status, email });
+      if (cmd === 'accounts:batch-toggle') {
+        commands.dispatch(cmd, { newStatus: status });
+      } else {
+        commands.dispatch(cmd, { id, currentStatus: status, email });
+      }
+    });
+
+    // 复选框 - 全选
+    this.delegate('change', '[data-action="select-all"]', () => {
+      commands.dispatch('accounts:select-all');
+    });
+
+    // 复选框 - 单选
+    this.delegate('change', '[data-action="select"]', (e, target) => {
+      const id = target.dataset.id;
+      commands.dispatch('accounts:select', { id });
     });
 
     this.on('[data-action="oauth-exchange"]', 'click', async () => {
       const callbackUrl = this.container.querySelector('#oauthCallback')?.value || '';
-      
+
       if (!callbackUrl) {
         toast.error('请粘贴回调URL');
         return;
@@ -487,11 +604,11 @@ _bindEvents() {
 
   async _handleFileImport(file) {
     const loading = toast.loading('正在导入...');
-    
+
     try {
       const text = await file.text();
       let data;
-      
+
       try {
         data = JSON.parse(text);
       } catch {
@@ -499,7 +616,7 @@ _bindEvents() {
         setTimeout(() => loading.close(), 2000);
         return;
       }
-      
+
       let accounts;
       if (Array.isArray(data)) {
         accounts = data;
@@ -510,42 +627,47 @@ _bindEvents() {
       } else {
         accounts = [];
       }
-      
+
       if (accounts.length === 0) {
         loading.update('未找到有效账号数据', 'warning');
         setTimeout(() => loading.close(), 2000);
         return;
       }
-      
+
       const validAccounts = accounts.filter(a => a.refresh_token).map(a => ({
         email: a.email || null,
         refresh_token: a.refresh_token,
         project_id: a.project_id || null
       }));
-      
+
       if (validAccounts.length === 0) {
         loading.update('未找到包含 refresh_token 的账号', 'warning');
         setTimeout(() => loading.close(), 2000);
         return;
       }
-      
+
       const result = await commands.dispatch('accounts:import-batch', { accounts: validAccounts });
       const results = result?.results || [];
       const successCount = results.filter(r => r.success).length;
       const failCount = results.length - successCount;
       const withProjectId = results.filter(r => r.success && r.project_id).length;
       const withoutProjectId = successCount - withProjectId;
-      
+
       loading.close();
-      
+
       if (failCount > 0) {
-        toast.warning(`导入完成：${successCount} 成功，${failCount} 失败`);
+        // 获取失败的错误信息
+        const failedResults = results.filter(r => !r.success);
+        const errorMessages = failedResults.map(r => r.error || '未知错误');
+        const uniqueErrors = [...new Set(errorMessages)];
+        const errorSummary = uniqueErrors.slice(0, 3).join('；');
+        toast.warning(`导入完成：${successCount} 成功，${failCount} 失败（${errorSummary}）`);
       } else if (withoutProjectId > 0) {
         toast.warning(`已导入 ${successCount} 个账号，但 ${withoutProjectId} 个未获取 project id（可能无法使用）`);
       } else {
         toast.success(`已导入 ${successCount} 个账号，全部成功获取 project id`);
       }
-      
+
       store.set('dialogs.import.open', false);
       await commands.dispatch('accounts:load', { silent: true });
     } catch (error) {

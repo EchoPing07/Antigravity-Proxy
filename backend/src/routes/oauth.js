@@ -83,11 +83,24 @@ export default async function oauthRoutes(fastify) {
                 account.refresh_token = refresh_token;
                 await initializeAccount(account);
             } catch (initError) {
-                // ignore
+                // 检查账号是否被删除（重复账号情况）
+                const stillExists = getAccountById(account.id);
+                if (!stillExists) {
+                    return reply.code(400).send({
+                        success: false,
+                        message: initError.message
+                    });
+                }
             }
 
             // Read back the latest account data (project_id might have been updated during initialization).
             const latestAccount = getAccountById(account.id);
+            if (!latestAccount) {
+                return reply.code(400).send({
+                    success: false,
+                    message: '账号创建后丢失'
+                });
+            }
             const project_id = latestAccount?.project_id || account.project_id || null;
             const tier = latestAccount?.tier || account.tier || null;
 

@@ -109,10 +109,22 @@ export default async function adminRoutes(fastify) {
             try {
                 await initializeAccount(account);
             } catch (initError) {
-                // 不删除账号，只是标记为 error 状态
+                // 检查账号是否被删除（重复账号情况）
+                const stillExists = getAccountById(accountId);
+                if (!stillExists) {
+                    return reply.code(400).send({
+                        error: { message: initError.message }
+                    });
+                }
+                // 其他初始化错误不阻止创建，只是账号状态可能为 error
             }
 
             const latest = getAccountById(accountId);
+            if (!latest) {
+                return reply.code(400).send({
+                    error: { message: '账号创建后丢失' }
+                });
+            }
             return {
                 success: true,
                 accountId,
@@ -150,16 +162,26 @@ export default async function adminRoutes(fastify) {
             try {
                 const accountId = createAccount(acc.email || null, acc.refresh_token, acc.project_id || null);
                 const account = getAccountById(accountId);
-                
+
                 try {
                     await initializeAccount(account);
                 } catch (initError) {
+                    // 检查账号是否被删除（重复账号情况）
+                    const stillExists = getAccountById(accountId);
+                    if (!stillExists) {
+                        results.push({ email: acc.email || '(unknown)', success: false, error: initError.message });
+                        continue;
+                    }
                 }
-                
+
                 const latest = getAccountById(accountId);
-                results.push({ 
-                    email: latest?.email || acc.email || '(unknown)', 
-                    success: true, 
+                if (!latest) {
+                    results.push({ email: acc.email || '(unknown)', success: false, error: '账号创建后丢失' });
+                    continue;
+                }
+                results.push({
+                    email: latest?.email || acc.email || '(unknown)',
+                    success: true,
                     accountId,
                     project_id: latest?.project_id || acc.project_id || null,
                     tier: latest?.tier || null
@@ -255,7 +277,7 @@ export default async function adminRoutes(fastify) {
                 // 同步配额
                 await fetchQuotaInfo(account);
 
-                results.push({ id: account.id, email: account.email, success: true });
+                results.push({ id: account.id, email: account.email, success: true, project_id: account.project_id || null });
             } catch (error) {
                 results.push({ id: account.id, email: account.email, success: false, error: error.message });
             }

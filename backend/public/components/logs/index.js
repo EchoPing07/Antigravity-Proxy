@@ -74,7 +74,6 @@ export class LogsPage extends Component {
                   <th>账号</th>
                   <th>状态</th>
                   <th>延迟</th>
-                  <th>错误信息</th>
                 </tr>
               </thead>
               <tbody>
@@ -134,44 +133,56 @@ export class LogsPage extends Component {
 
     return logs.map(l => {
       const isError = l.status !== 'success';
-      const errorMsg = l.error_message || '';
+      const errorMsg = this._formatError(l.error_message || '');
 
       const rid = l.request_id || '-';
       const attemptNo = Number.isFinite(Number(l.attempt_no)) ? Number(l.attempt_no) : null;
       const accountAttempt = Number.isFinite(Number(l.account_attempt)) ? Number(l.account_attempt) : null;
       const sameRetry = Number.isFinite(Number(l.same_retry)) ? Number(l.same_retry) : null;
       const attemptLabel = attemptNo !== null
-        ? `${attemptNo}${accountAttempt !== null || sameRetry !== null ? ` (acc#${accountAttempt ?? '-'} r${sameRetry ?? '-'})` : ''}`
+        ? `${attemptNo} (acc#${accountAttempt ?? '-'} r${sameRetry ?? '-'})`
         : '-';
 
-      return `
-        <tr>
-          <td class="mono" data-label="时间" style="font-size:13px;white-space:nowrap">
-            ${formatTime(l.created_at)}
-          </td>
-          <td class="mono" data-label="请求ID" style="font-size:12px">
-            ${this._escape(rid)}
-          </td>
-          <td class="mono" data-label="尝试" style="font-size:13px;white-space:nowrap">
-            ${this._escape(attemptLabel)}
-          </td>
-          <td class="mono" data-label="模型" style="font-size:14px;word-break:break-all;min-width:120px">${this._escape(l.model)}</td>
-          <td data-label="账号" style="font-size:13px">${this._escape(l.account_email || '-')}</td>
+      // 主行 + 错误信息行（如果有错误的话）
+      const mainRow = `
+        <tr class="${isError ? 'log-row-error' : ''}">
+          <td class="mono" data-label="时间">${formatTime(l.created_at)}</td>
+          <td class="mono" data-label="请求ID" style="font-size:12px">${this._escape(rid)}</td>
+          <td class="mono" data-label="尝试">${this._escape(attemptLabel)}</td>
+          <td class="mono" data-label="模型">${this._escape(l.model)}</td>
+          <td data-label="账号">${this._escape(l.account_email || '-')}</td>
           <td data-label="状态">
             <span class="badge ${isError ? 'badge-danger' : 'badge-success'}">
               ${isError ? '失败' : '成功'}
             </span>
           </td>
           <td class="mono" data-label="延迟">${l.latency_ms}ms</td>
-          <td data-label="错误信息">
-            ${errorMsg
-              ? `<span class="error-text">${this._escape(errorMsg)}</span>`
-              : '<span class="text-secondary">-</span>'
-            }
-          </td>
         </tr>
       `;
+
+      // 如果有错误信息，添加第二行显示错误
+      const errorRow = errorMsg ? `
+        <tr class="log-error-row">
+          <td colspan="7" class="log-error-cell">
+            <div class="error-text">${this._escape(errorMsg)}</div>
+          </td>
+        </tr>
+      ` : '';
+
+      return mainRow + errorRow;
     }).join('');
+  }
+
+  _formatError(msg) {
+    if (!msg) return '';
+    try {
+      if (msg.trim().startsWith('{') || msg.trim().startsWith('[')) {
+        const parsed = JSON.parse(msg);
+        return JSON.stringify(parsed, null, 2);
+      }
+    } catch (e) {
+    }
+    return msg;
   }
 
   onMount() {

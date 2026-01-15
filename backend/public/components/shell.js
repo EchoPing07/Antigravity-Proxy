@@ -1,8 +1,3 @@
-/**
- * 应用外壳组件
- * 包含侧边栏导航和主内容区域
- */
-
 import { Component } from '../core/component.js';
 import { store } from '../core/store.js';
 import { commands } from '../commands/index.js';
@@ -10,7 +5,7 @@ import { commands } from '../commands/index.js';
 export class Shell extends Component {
   constructor(container) {
     super(container);
-    this._sidebarOpen = false;
+    this._tabSliderInited = false;
   }
 
   render() {
@@ -20,148 +15,101 @@ export class Shell extends Component {
 
     return `
       <div class="app-shell">
-        <!-- 移动端遮罩 -->
-        <div class="sidebar-backdrop" data-action="close-sidebar"></div>
+        <div class="container">
+          <header class="app-header">
+            <div class="brand">
+              <span class="brand-name">Antigravity</span>
+              <span class="brand-tag">Proxy</span>
+            </div>
+            <div class="header-right">
+              <span class="user-info">
+                ${this._escape(user?.username || 'Admin')}
+              </span>
+              <button class="btn btn-sm btn-danger" data-cmd="auth:logout">
+                退出
+              </button>
+            </div>
+          </header>
 
-        <!-- 移动端顶部栏 -->
-        <div class="mobile-header">
-          <div class="brand">
-            <span class="brand-name">Antigravity</span>
-            <span class="brand-tag">Proxy</span>
+          <div class="tabs-container">
+            <nav class="tabs">
+              <div class="tab-slider"></div>
+              <button class="tab ${activeTab === 'dashboard' ? 'active' : ''}"
+                      data-cmd="nav:change" data-tab="dashboard">
+                📊 仪表盘
+              </button>
+              <button class="tab ${activeTab === 'accounts' ? 'active' : ''}"
+                      data-cmd="nav:change" data-tab="accounts">
+                👥 账号管理
+              </button>
+              <button class="tab ${activeTab === 'logs' ? 'active' : ''}"
+                      data-cmd="nav:change" data-tab="logs">
+                📜 请求日志
+              </button>
+            </nav>
+            <div class="tab-actions">
+              <button class="btn btn-sm btn-icon" data-cmd="theme:toggle" 
+                      title="${theme === 'dark' ? '切换亮色' : '切换暗色'}">
+                ${theme === 'dark' ? '🌙' : '☀️'}
+              </button>
+              <button class="btn btn-sm btn-icon" data-cmd="data:refresh" title="刷新">
+                🔄
+              </button>
+            </div>
           </div>
-          <div class="mobile-header-actions">
-            <button class="mobile-menu-toggle" data-action="toggle-sidebar" title="菜单">
-              ☰
-            </button>
-          </div>
+
+          <main id="pageContent" data-preserve-children="true"></main>
         </div>
-
-        <aside class="sidebar">
-          <div class="brand">
-            <span class="brand-name">Antigravity</span>
-            <span class="brand-tag">Proxy</span>
-          </div>
-
-          <nav class="nav-menu">
-            <div class="nav-item ${activeTab === 'dashboard' ? 'active' : ''}"
-                 data-cmd="nav:change" data-tab="dashboard">
-              <span class="icon">📊</span>
-              <span class="nav-text">仪表盘</span>
-            </div>
-            <div class="nav-item ${activeTab === 'accounts' ? 'active' : ''}"
-                 data-cmd="nav:change" data-tab="accounts">
-              <span class="icon">👥</span>
-              <span class="nav-text">账号管理</span>
-            </div>
-            <div class="nav-item ${activeTab === 'logs' ? 'active' : ''}"
-                 data-cmd="nav:change" data-tab="logs">
-              <span class="icon">📜</span>
-              <span class="nav-text">请求日志</span>
-            </div>
-          </nav>
-
-          <div class="sidebar-footer">
-            <div class="theme-toggle" data-cmd="theme:toggle">
-              <span class="icon">${theme === 'dark' ? '🌙' : '☀️'}</span>
-              <span>${theme === 'dark' ? '暗色模式' : '明亮模式'}</span>
-            </div>
-          </div>
-        </aside>
-
-        <main class="main-content">
-          <div class="page-wrapper">
-            <header class="page-header">
-              <h1 class="page-title">${this._getPageTitle(activeTab)}</h1>
-              <div class="header-actions">
-                <span class="user-info">
-                  已登录：<strong>${this._escape(user?.username || 'Admin')}</strong>
-                </span>
-                <button class="btn btn-sm" data-cmd="data:refresh">
-                  🔄 刷新
-                </button>
-                <button class="btn btn-sm btn-danger" data-cmd="auth:logout">
-                  退出登录
-                </button>
-              </div>
-            </header>
-
-            <div id="pageContent" data-preserve-children="true"></div>
-          </div>
-        </main>
       </div>
     `;
   }
 
-  _getPageTitle(tab) {
-    const titles = {
-      dashboard: '仪表盘',
-      accounts: '账号管理',
-      logs: '请求日志'
-    };
-    return titles[tab] || '';
+  onMount() {
+    this.watch(['activeTab', 'theme', 'user']);
+    requestAnimationFrame(() => this._updateTabSlider(false));
   }
 
-  onMount() {
-    // 监听状态变化
-    this.watch(['activeTab', 'theme', 'user']);
+  onUpdate() {
+    requestAnimationFrame(() => this._updateTabSlider(true));
   }
 
   _bindEvents() {
-    // 命令按钮点击
     this.delegate('click', '[data-cmd]', (e, target) => {
       const cmd = target.dataset.cmd;
       const tab = target.dataset.tab;
-
       commands.dispatch(cmd, { tab });
-
-      // 移动端点击导航后自动关闭侧边栏
-      if (cmd === 'nav:change') {
-        this._closeSidebar();
-      }
     });
 
-    // 移动端菜单切换
-    this.on('[data-action="toggle-sidebar"]', 'click', () => {
-      this._toggleSidebar();
-    });
-
-    // 点击遮罩关闭侧边栏
-    this.on('[data-action="close-sidebar"]', 'click', () => {
-      this._closeSidebar();
-    });
-
-    // ESC 键关闭侧边栏
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && this._sidebarOpen) {
-        this._closeSidebar();
-      }
+    window.addEventListener('resize', () => {
+      this._updateTabSlider(false);
     });
   }
 
-  _toggleSidebar() {
-    if (this._sidebarOpen) {
-      this._closeSidebar();
+  _updateTabSlider(animate = true) {
+    const slider = this.container.querySelector('.tab-slider');
+    const activeTab = this.container.querySelector('.tab.active');
+    const tabs = this.container.querySelector('.tabs');
+    
+    if (!slider || !activeTab || !tabs) return;
+
+    const tabLeft = activeTab.offsetLeft;
+    const tabWidth = activeTab.offsetWidth;
+    const tabsWidth = tabs.scrollWidth;
+    const rightValue = tabsWidth - tabLeft - tabWidth;
+
+    if (animate && this._tabSliderInited) {
+      slider.style.transition = 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1), right 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
     } else {
-      this._openSidebar();
+      slider.style.transition = 'none';
     }
-  }
 
-  _openSidebar() {
-    this._sidebarOpen = true;
-    const sidebar = this.container.querySelector('.sidebar');
-    const backdrop = this.container.querySelector('.sidebar-backdrop');
-    if (sidebar) sidebar.classList.add('open');
-    if (backdrop) backdrop.classList.add('show');
-    document.body.style.overflow = 'hidden';
-  }
+    slider.style.left = `${tabLeft}px`;
+    slider.style.right = `${rightValue}px`;
 
-  _closeSidebar() {
-    this._sidebarOpen = false;
-    const sidebar = this.container.querySelector('.sidebar');
-    const backdrop = this.container.querySelector('.sidebar-backdrop');
-    if (sidebar) sidebar.classList.remove('open');
-    if (backdrop) backdrop.classList.remove('show');
-    document.body.style.overflow = '';
+    if (!this._tabSliderInited) {
+      slider.offsetHeight;
+      this._tabSliderInited = true;
+    }
   }
 }
 

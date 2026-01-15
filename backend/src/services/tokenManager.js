@@ -1,5 +1,5 @@
 import { OAUTH_CONFIG, ANTIGRAVITY_CONFIG, AVAILABLE_MODELS, getMappedModel } from '../config.js';
-import { updateAccountToken, updateAccountQuota, updateAccountStatus, updateAccountProjectId, updateAccountTier, updateAccountEmail, getAllAccountsForRefresh, upsertAccountModelQuota } from '../db/index.js';
+import { updateAccountToken, updateAccountQuota, updateAccountStatus, updateAccountProjectId, updateAccountTier, updateAccountEmail, getAllAccountsForRefresh, upsertAccountModelQuota, getAccountByEmail, deleteAccount } from '../db/index.js';
 
 // Token 刷新提前时间（5分钟）
 const TOKEN_REFRESH_BUFFER = 5 * 60 * 1000;
@@ -362,6 +362,13 @@ export async function fetchEmail(account) {
         const email = data.email;
 
         if (email) {
+            // 检查 email 是否已被其他账号使用
+            const existing = getAccountByEmail(email);
+            if (existing && existing.id !== account.id) {
+                // 删除当前新创建的账号（它是重复的）
+                deleteAccount(account.id);
+                throw new Error(`账号 ${email} 已存在`);
+            }
             updateAccountEmail(account.id, email);
             account.email = email;
         }
@@ -383,8 +390,12 @@ export async function initializeAccount(account) {
     if (!account.email) {
         try {
             await fetchEmail(account);
-        } catch {
-            // email 获取失败不影响账号初始化
+        } catch (emailError) {
+            // 如果是账号已存在错误，需要重新抛出（账号已被删除）
+            if (emailError.message && emailError.message.includes('已存在')) {
+                throw emailError;
+            }
+            // 其他 email 获取失败不影响账号初始化
         }
     }
 

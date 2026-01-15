@@ -217,7 +217,8 @@ export const store = new Store({
   accounts: {
     list: [],
     loading: false,
-    error: null
+    error: null,
+    selectedIds: []  // 批量操作选中的账号ID
   },
   
   // 日志查看
@@ -261,8 +262,8 @@ export const store = new Store({
     }
   },
   
-  // 主题
-  theme: localStorage.getItem('theme') || 'dark'
+// 主题
+  theme: localStorage.getItem('theme') || 'light'
 });
 
 // 开发模式下暴露到全局方便调试

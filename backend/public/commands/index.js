@@ -158,16 +158,26 @@ commands.register('accounts:refresh', async ({ id }) => {
 commands.register('accounts:refresh-all', async () => {
   store.set('accounts.refreshingAll', true);
   const loading = toast.loading('正在刷新全部账号...');
-  
+
   try {
     const result = await api.refreshAllAccounts();
     const results = result?.results || [];
-    const count = results.filter(r => r && r.success).length;
-    const total = results.length;
-    const message = total ? `已刷新 ${count}/${total} 个账号` : '没有可刷新的账号';
-    loading.update(message, 'success');
-    setTimeout(() => loading.close(), 2000);
-    
+    const successCount = results.filter(r => r && r.success).length;
+    const failCount = results.length - successCount;
+    const withProjectId = results.filter(r => r && r.success && r.project_id).length;
+    const withoutProjectId = successCount - withProjectId;
+
+    if (results.length === 0) {
+      loading.update('没有可刷新的账号', 'warning');
+    } else if (failCount > 0) {
+      loading.update(`刷新完成：${successCount} 成功，${failCount} 失败`, 'warning');
+    } else if (withoutProjectId > 0) {
+      loading.update(`已刷新 ${successCount} 个账号，但 ${withoutProjectId} 个未获取 project id`, 'warning');
+    } else {
+      loading.update(`已刷新 ${successCount} 个账号，全部成功获取 project id`, 'success');
+    }
+    setTimeout(() => loading.close(), 2500);
+
     await commands.dispatch('accounts:load', { silent: true });
   } catch (error) {
     loading.close();
@@ -317,6 +327,195 @@ commands.register('accounts:export-single', async ({ id }) => {
     
     loading.update('已导出', 'success');
     setTimeout(() => loading.close(), 1500);
+  } catch (error) {
+    loading.close();
+    throw error;
+  }
+});
+
+// ============ 账号批量操作命令 ============
+
+commands.register('accounts:select', ({ id }) => {
+  const selectedIds = store.get('accounts.selectedIds') || [];
+  const idStr = String(id);
+
+  if (selectedIds.includes(idStr)) {
+    store.set('accounts.selectedIds', selectedIds.filter(i => i !== idStr));
+  } else {
+    store.set('accounts.selectedIds', [...selectedIds, idStr]);
+  }
+});
+
+commands.register('accounts:select-all', () => {
+  const accounts = store.get('accounts.list') || [];
+  const selectedIds = store.get('accounts.selectedIds') || [];
+
+  if (selectedIds.length === accounts.length) {
+    store.set('accounts.selectedIds', []);
+  } else {
+    store.set('accounts.selectedIds', accounts.map(a => String(a.id)));
+  }
+});
+
+commands.register('accounts:clear-selection', () => {
+  store.set('accounts.selectedIds', []);
+});
+
+commands.register('accounts:batch-refresh', async () => {
+  const selectedIds = store.get('accounts.selectedIds') || [];
+  if (selectedIds.length === 0) {
+    toast.warning('请先选择账号');
+    return;
+  }
+
+  const loading = toast.loading(`正在刷新 ${selectedIds.length} 个账号...`);
+  let success = 0;
+  let fail = 0;
+  let withProjectId = 0;
+
+  for (const id of selectedIds) {
+    try {
+      const result = await api.refreshAccount(id);
+      const data = result?.data || result;
+      success++;
+      if (data?.project_id) {
+        withProjectId++;
+      }
+    } catch (e) {
+      fail++;
+    }
+  }
+
+  loading.close();
+
+  const withoutProjectId = success - withProjectId;
+  if (fail > 0) {
+    toast.warning(`刷新完成：${success} 成功，${fail} 失败`);
+  } else if (withoutProjectId > 0) {
+    toast.warning(`已刷新 ${success} 个账号，但 ${withoutProjectId} 个未获取 project id`);
+  } else {
+    toast.success(`已刷新 ${success} 个账号，全部成功获取 project id`);
+  }
+
+  store.set('accounts.selectedIds', []);
+  await commands.dispatch('accounts:load', { silent: true });
+});
+
+commands.register('accounts:batch-toggle', async ({ newStatus }) => {
+  const selectedIds = store.get('accounts.selectedIds') || [];
+  if (selectedIds.length === 0) {
+    toast.warning('请先选择账号');
+    return;
+  }
+
+  const actionText = newStatus === 'active' ? '启用' : '禁用';
+  const loading = toast.loading(`正在${actionText} ${selectedIds.length} 个账号...`);
+  let success = 0;
+  let fail = 0;
+
+  for (const id of selectedIds) {
+    try {
+      await api.updateAccountStatus(id, newStatus);
+      success++;
+    } catch (e) {
+      fail++;
+    }
+  }
+
+  loading.close();
+  if (fail > 0) {
+    toast.warning(`${actionText}完成: ${success} 成功, ${fail} 失败`);
+  } else {
+    toast.success(`已${actionText} ${success} 个账号`);
+  }
+
+  store.set('accounts.selectedIds', []);
+  await commands.dispatch('accounts:load', { silent: true });
+});
+
+commands.register('accounts:batch-delete', async () => {
+  const selectedIds = store.get('accounts.selectedIds') || [];
+  if (selectedIds.length === 0) {
+    toast.warning('请先选择账号');
+    return;
+  }
+
+  const confirmed = await confirm.show({
+    title: '批量删除账号',
+    message: `确定要删除 ${selectedIds.length} 个账号吗？此操作不可恢复！`,
+    confirmText: '删除',
+    danger: true
+  });
+
+  if (!confirmed) {
+    return;
+  }
+
+  const loading = toast.loading(`正在删除 ${selectedIds.length} 个账号...`);
+  let success = 0;
+  let fail = 0;
+
+  for (const id of selectedIds) {
+    try {
+      await api.deleteAccount(id);
+      success++;
+    } catch (e) {
+      fail++;
+    }
+  }
+
+  loading.close();
+  if (fail > 0) {
+    toast.warning(`删除完成: ${success} 成功, ${fail} 失败`);
+  } else {
+    toast.success(`已删除 ${success} 个账号`);
+  }
+
+  store.set('accounts.selectedIds', []);
+  await commands.dispatch('accounts:load', { silent: true });
+});
+
+commands.register('accounts:batch-export', async () => {
+  const selectedIds = store.get('accounts.selectedIds') || [];
+  if (selectedIds.length === 0) {
+    toast.warning('请先选择账号');
+    return;
+  }
+
+  const loading = toast.loading('正在导出...');
+
+  try {
+    const result = await api.exportAccounts();
+    const allAccounts = result?.accounts || [];
+    const accountList = store.get('accounts.list') || [];
+
+    // 找到选中的账号对应的导出数据
+    const selectedEmails = accountList
+      .filter(a => selectedIds.includes(String(a.id)))
+      .map(a => a.email);
+
+    const exportData = allAccounts.filter(a => selectedEmails.includes(a.email));
+
+    if (exportData.length === 0) {
+      loading.update('未找到可导出的账号', 'warning');
+      setTimeout(() => loading.close(), 2000);
+      return;
+    }
+
+    const json = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `tokens-selected-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    loading.update(`已导出 ${exportData.length} 个账号`, 'success');
+    setTimeout(() => loading.close(), 2000);
+
+    store.set('accounts.selectedIds', []);
   } catch (error) {
     loading.close();
     throw error;
@@ -504,12 +703,12 @@ commands.register('theme:toggle', () => {
   
   store.set('theme', next);
   localStorage.setItem('theme', next);
-  document.documentElement.classList.toggle('light-mode', next === 'light');
+  document.documentElement.classList.toggle('dark-mode', next === 'dark');
 });
 
 commands.register('theme:init', () => {
   const theme = store.get('theme');
-  document.documentElement.classList.toggle('light-mode', theme === 'light');
+  document.documentElement.classList.toggle('dark-mode', theme === 'dark');
 });
 
 // ============ 数据刷新命令 ============
