@@ -1,5 +1,14 @@
 # Antigravity Proxy
 
+⚠️ **声明 / Disclaimer**
+
+1. **用途说明**：本仓库仅用于个人云端编译测试，旨在解决超低内存环境下的特殊部署需求。
+2. **风险提示**：代码及构建脚本包含针对特定硬件的优化，请勿直接运行。
+3. **维护状态**：不接受任何 Issue，不保证代码更新，随时可能删库。
+4. **版权归属**：代码逻辑引用自原作者，本仓库仅为 Alpine Linux 云端编译。
+
+---
+
 
 将 Antigravity 封装成 **OpenAI / Anthropic / Gemini** 标准格式，支持 Gemini、Claude等多种模型，完美兼容 Claude Code。
 
