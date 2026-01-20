@@ -1,0 +1,50 @@
+name: CI/CD Build Pipeline
+
+on:
+  workflow_dispatch: # 保留手动触发，方便你控制
+
+permissions:
+  contents: write
+
+jobs:
+  production-build:
+    name: Build for Alpine Linux (Production)
+    runs-on: ubuntu-latest
+    # 使用 Alpine Edge 确保与目标服务器环境完全对齐
+    container: alpine:edge
+
+    steps:
+      - name: Initialize Build Environment
+        run: |
+          apk update
+          apk add nodejs npm python3 make g++ gcc git zip
+
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Runtime Dependencies
+        run: |
+          # 仅安装生产环境依赖，确保包体积最小化
+          npm install --omit=dev --no-audit --no-fund
+          cd backend && npm install --omit=dev --no-audit --no-fund
+          cd ..
+
+      - name: Create Distribution Package
+        run: |
+          # 剔除无关文件，只保留运行必须的内容
+          zip -r antigravity-proxy-linux-musl.zip . -x "*.git*" ".github*" "Dockerfile" "*.md" ".gitignore"
+
+      - name: Publish Formal Release
+        uses: softprops/action-gh-release@v1
+        with:
+          # 使用正式的版本号格式
+          tag_name: v1.0.${{ github.run_number }}
+          name: Antigravity Proxy Release v1.0.${{ github.run_number }}
+          body: |
+            ### Antigravity Proxy Deployment Package
+            - **Platform:** Alpine Linux (musl)
+            - **Base Engine:** Node.js v24+
+            - **Build Type:** Optimized for low-memory environments
+          files: antigravity-proxy-linux-musl.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
